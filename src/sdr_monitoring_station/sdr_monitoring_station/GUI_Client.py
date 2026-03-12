@@ -2,14 +2,13 @@ import sys
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-
+from geometry_msgs.msg import Twist
 
 from PySide6.QtWidgets import QApplication, QMainWindow
 from PySide6.QtCore import QTimer,Qt
 from PySide6.QtGui import QPixmap
 
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSHistoryPolicy, QoSReliabilityPolicy
-# from .consol_ui import Ui_Form
 from.gui_ui import Ui_Form
 from rclpy.callback_groups import ReentrantCallbackGroup
 from sensor_msgs.msg import BatteryState
@@ -33,10 +32,11 @@ class Tsar_Node(Node):
             durability=QoSDurabilityPolicy.VOLATILE)#과거는 잊고 현재 것만 준다
 
     self.pub = self.create_publisher(
-            String,
-            'ui_pub_sub',
+            Twist,
+            '/cmd_vel',
             qos,
             )
+
 
 
 #라즈베리 제어
@@ -59,8 +59,6 @@ class Tsar_Node(Node):
        self.get_logger().info(
         f"Battery recv: voltage={msg.voltage}, percentage={msg.percentage}"
     )
-
-
 
     # self.stop_service_clint = self.create_client(String, 'stop_service')
     # self.stop_clint = stop_service_clint.Request()
@@ -107,10 +105,11 @@ class MainWindow(QMainWindow):
         self.battery_timer.start(200)
 
     def publish_ui(self):
-        msg = String()
-        msg.data = f"{self.linear} {self.angular}"   # 반드시 문자열!
+        msg = Twist()
+        msg.linear.x = float(self.linear)
+        msg.angular.z = float(self.angular)  # 반드시 문자열!
         self.tsar.pub.publish(msg)
-        self.tsar.get_logger().info(f"Published ui_pub_sub: {msg.data}")
+        self.tsar.get_logger().info( f"Published ui_pub_sub: linear.x={msg.linear.x}, angular.z={msg.angular.z}")
         self.ui.listWidget.addItem(f"linear:{self.linear},angular{self.angular}")
 
 #rasp ----------------------------------------------
