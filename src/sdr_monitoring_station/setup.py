@@ -26,6 +26,8 @@ setup(
         'console_scripts': [
             # 실행 명령: ros2 run sdr_monitoring_station gui_node
             'gui_node = sdr_monitoring_station.gui_node:main',
+            'GUI_Client = sdr_monitoring_station.GUI_Client:main',
+            'rasp_face = sdr_monitoring_station.rasp_face:main',
         ],
     },
 )
