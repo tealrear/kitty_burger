@@ -28,20 +28,30 @@ class DetectHumanNode(Node):
         self.hands = mp.solutions.hands.Hands(max_num_hands=1)
 
         self.img_queue = queue.Queue(maxsize=1)
+        self.current_state = "ACT0_SLEEPY"
         self.last_hand_log_time = 0.0
         self.last_face_log_time = 0.0
 
         self.label_map = {0: "anger", 1: "fear", 2: "happy", 3: "neutral", 4: "sad"}
 
         self.sub = self.create_subscription(CompressedImage, '/image_raw/compressed', self.image_callback, 10)
+        self.state_sub = self.create_subscription(String, '/mission_state', self.state_cb, 10)
+        
         self.hand_pub = self.create_publisher(String, '/person/hand', 10)
         self.exp_pub = self.create_publisher(String, '/person/expression', 10)
+        self.face_id_pub = self.create_publisher(String, '/person/face_id', 10)
 
         threading.Thread(target=self.inference_worker, daemon=True).start()
+        self.get_logger().info("🚀 [AI] 인적 탐지 노드가 정상적으로 시작되었습니다.")
+
+    def state_cb(self, msg):
+        self.current_state = msg.data
 
     def image_callback(self, msg):
-        if self.img_queue.empty():
-            self.img_queue.put(msg)
+        # AI가 작동해야 하는 상태에서만 큐에 데이터 삽입
+        if self.current_state in ["ACT3_AUTHENTICATE", "ACT5_PAYMENT"]:
+            if self.img_queue.empty():
+                self.img_queue.put(msg)
 
     # ---------------- 손가락 계산 ----------------
     def angle(self, a, b, c):
@@ -58,10 +68,12 @@ class DetectHumanNode(Node):
 
     def get_gesture(self, hand_landmarks):
         l = hand_landmarks.landmark
+        
         idx_s = self.is_finger_straight(l, 8, 6, 5)
         mid_s = self.is_finger_straight(l, 12, 10, 9)
         rng_s = self.is_finger_straight(l, 16, 14, 13)
         pnk_s = self.is_finger_straight(l, 20, 18, 17)
+
         thm_o = (l[4].x - l[3].x)**2 + (l[4].y - l[3].y)**2 > 0
         if idx_s and not mid_s and not rng_s and not pnk_s: return "지시"
         if idx_s and mid_s and not rng_s and not pnk_s: return "브이"
@@ -87,19 +99,16 @@ class DetectHumanNode(Node):
 
     # ---------------- 얼굴/표정 계산 ----------------
     def detect_expression(self, image):
-        if image is None or image.size == 0:
-            return None
-        res = self.expression_model(image)
+        if image is None or image.size == 0: return None
+        res = self.expression_model(image, verbose=False)
         for r in res:
             for b in r.boxes:
                 conf = float(b.conf)
-                if conf < CONF_THRESHOLD:
-                    continue
-                label = self.label_map.get(int(b.cls), "unknown")
-                self.exp_pub.publish(String(data=json.dumps({"expression": label})))
-                if time.time() - self.last_face_log_time >= LOG_INTERVAL:
-                    self.get_logger().info(f"[FACE] Expression: {label}")
-                    self.last_face_log_time = time.time()
+                if conf >= CONF_THRESHOLD:
+                    label = self.label_map.get(int(b.cls), "unknown")
+                    # [상태 기반 토픽 발행] 결제/교감 단계에서만 표정 발행
+                    if self.current_state == "ACT5_PAYMENT":
+                        self.exp_pub.publish(String(data=json.dumps({"expression": label})))
         return res
 
     # ---------------- 메인 추론 ----------------
@@ -113,12 +122,17 @@ class DetectHumanNode(Node):
                     continue
 
                 # ---------------- 얼굴/주인 인식 ----------------
-                host_results = self.host_model(frame)
+                host_results = self.host_model(frame, verbose=False)
                 face_boxes = []
                 for r in host_results:
                     for box in r.boxes:
                         conf = float(box.conf)
                         label = self.host_model.names[int(box.cls)]
+
+                        if label == "manager" and conf >= MANAGER_THRESHOLD:
+                            # 주인임이 확인되면 face_id 토픽 발행
+                            self.face_id_pub.publish(String(data="manager"))
+
                         if conf < CONF_THRESHOLD:
                             continue
                         coords = np.ravel(box.xyxy.cpu().numpy())
@@ -163,7 +177,8 @@ class DetectHumanNode(Node):
                     if kind == 'face':
                         x1, y1, x2, y2, label, conf = data
                         best_crop = frame[y1:y2, x1:x2]
-                        self.detect_expression(best_crop)
+                        if self.current_state == "ACT5_PAYMENT":
+                            self.detect_expression(best_crop)
                         # manager threshold 적용
                         if label == "manager" and conf >= MANAGER_THRESHOLD:
                             self.get_logger().info(f"[MANAGER] Detected at [{x1},{y1},{x2},{y2}], conf={conf:.2f}")
