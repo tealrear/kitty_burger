@@ -469,7 +469,212 @@ def thank_you_face(seconds=5):
     lcd.write_string("Thank you")
     sleep(seconds)
 
+# =========================
+# 11) 조는 표정
+# =========================
+def load_sleepy_face():
+    EYE_HALF = [
+        0b00000,
+        0b11111,
+        0b01110,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+    ]
+    EYE_CLOSED = [
+        0b00000,
+        0b00000,
+        0b11111,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+    ]
+    MOUTH_SLEEPY = [
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00100,
+        0b00000,
+        0b00100,
+        0b00000,
+        0b00000,
+    ]
 
+    load_chars({
+        0: EYE_HALF,
+        1: EYE_CLOSED,
+        2: MOUTH_SLEEPY,
+    })
+
+def draw_sleepy(eye_mode=0):
+    lcd.clear()
+    lcd.cursor_pos = (0, 4)
+    lcd.write_string(chr(eye_mode))
+    lcd.cursor_pos = (0, 11)
+    lcd.write_string(chr(eye_mode))
+    lcd.cursor_pos = (1, 7)
+    lcd.write_string(chr(2))
+    lcd.cursor_pos = (1, 12)
+    lcd.write_string("z")
+
+def sleepy_demo(seconds=5):
+    load_sleepy_face()
+    elapsed = 0.0
+    while elapsed < seconds:
+        draw_sleepy(0)   # 반쯤 감김
+        sleep(0.7)
+        elapsed += 0.7
+        if elapsed >= seconds:
+            break
+
+        draw_sleepy(1)   # 완전히 감김
+        sleep(0.7)
+        elapsed += 0.7
+
+# =========================
+# 12) 행복한 표정
+# =========================
+def load_happy_face():
+    EYE_HAPPY = [
+        0b00000,
+        0b10001,
+        0b01010,
+        0b00100,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+    ]
+    MOUTH_SMILE_L = [
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b10000,
+        0b01000,
+        0b00110,
+        0b00001,
+    ]
+    MOUTH_SMILE_R = [
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00001,
+        0b00010,
+        0b01100,
+        0b10000,
+    ]
+
+    load_chars({
+        0: EYE_HAPPY,
+        1: MOUTH_SMILE_L,
+        2: MOUTH_SMILE_R,
+    })
+
+def show_happy(seconds=5):
+    load_happy_face()
+    lcd.clear()
+    lcd.cursor_pos = (0, 4)
+    lcd.write_string(chr(0))
+    lcd.cursor_pos = (0, 11)
+    lcd.write_string(chr(0))
+    lcd.cursor_pos = (1, 7)
+    lcd.write_string(chr(1) + chr(2))
+    sleep(seconds)
+
+# =========================
+# 13) 반가운 표정
+# =========================
+def load_greeting_face():
+    EYE_OPEN = [
+        0b01110,
+        0b10001,
+        0b10101,
+        0b10001,
+        0b01110,
+        0b00000,
+        0b00000,
+        0b00000,
+    ]
+    EYE_HAPPY = [
+        0b00000,
+        0b10001,
+        0b01010,
+        0b00100,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+    ]
+    MOUTH_SMILE_L = [
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b10000,
+        0b01000,
+        0b00110,
+        0b00001,
+    ]
+    MOUTH_SMILE_R = [
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00000,
+        0b00001,
+        0b00010,
+        0b01100,
+        0b10000,
+    ]
+
+    load_chars({
+        0: EYE_OPEN,
+        1: EYE_HAPPY,
+        2: MOUTH_SMILE_L,
+        3: MOUTH_SMILE_R,
+    })
+
+def draw_greeting(happy=False):
+    eye = 1 if happy else 0
+    lcd.clear()
+    lcd.cursor_pos = (0, 4)
+    lcd.write_string(chr(eye))
+    lcd.cursor_pos = (0, 11)
+    lcd.write_string(chr(eye))
+    lcd.cursor_pos = (1, 7)
+    lcd.write_string(chr(2) + chr(3))
+
+def greeting_demo(seconds=5):
+    load_greeting_face()
+    elapsed = 0.0
+    while elapsed < seconds:
+        draw_greeting(False)
+        sleep(0.35)
+        elapsed += 0.35
+        if elapsed >= seconds:
+            break
+
+        draw_greeting(True)
+        sleep(0.35)
+        elapsed += 0.35
+
+# =========================
+# 14) MONEY 표정
+# =========================
+def money_face_eyes(seconds=5):
+    lcd.clear()
+    lcd.cursor_pos = (0, 4)
+    lcd.write_string("$")
+    lcd.cursor_pos = (0, 11)
+    lcd.write_string("$")
+    lcd.cursor_pos = (1, 5)
+    lcd.write_string("MONEY!")
+    sleep(seconds)
 
 # =========================
 # Controller Node
@@ -552,6 +757,14 @@ class Controller(Node):
             v_eyes(5)
         elif cmd == 'thankyou':
             thank_you_face(5)
+        elif cmd == 'sleepy':
+            sleepy_demo(5)
+        elif cmd == 'happy':
+            show_happy(5)
+        elif cmd == 'greeting':
+            greeting_demo(5)
+        elif cmd == 'money':
+            money_face_eyes(5)
 
 
         else:
