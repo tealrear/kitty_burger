@@ -115,77 +115,81 @@ class DetectHumanNode(Node):
     def inference_worker(self):
         while rclpy.ok():
             try:
-                msg = self.img_queue.get(timeout=1.0)
-                frame = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
-                if frame is None or frame.size == 0:
-                    self.get_logger().warn("Empty frame received, skipping...")
+                try:
+                    msg = self.img_queue.get(timeout=1.0)
+                    frame = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
+                    if frame is None or frame.size == 0:
+                        self.get_logger().warn("Empty frame received, skipping...")
+                        continue
+
+                    # ---------------- 얼굴/주인 인식 ----------------
+                    host_results = self.host_model(frame, verbose=False)
+                    face_boxes = []
+                    for r in host_results:
+                        for box in r.boxes:
+                            conf = float(box.conf)
+                            label = self.host_model.names[int(box.cls)]
+
+                            if label == "manager" and conf >= MANAGER_THRESHOLD:
+                                # 주인임이 확인되면 face_id 토픽 발행
+                                self.face_id_pub.publish(String(data="manager"))
+
+                            if conf < CONF_THRESHOLD:
+                                continue
+                            coords = np.ravel(box.xyxy.cpu().numpy())
+                            x1, y1, x2, y2 = [int(c) for c in coords]
+                            # 안전하게 crop
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                            if x2 <= x1 or y2 <= y1:
+                                continue
+                            face_boxes.append((x1, y1, x2, y2, label, conf))
+
+                    # ---------------- 손 인식 ----------------
+                    hand_results = self.detect_hand(frame)
+                    hand_boxes = []
+                    if hand_results:
+                        h, w, _ = frame.shape
+                        for landmarks in hand_results:
+                            xs = [l.x for l in landmarks.landmark]
+                            ys = [l.y for l in landmarks.landmark]
+                            x1, y1 = int(min(xs)*w), int(min(ys)*h)
+                            x2, y2 = int(max(xs)*w), int(max(ys)*h)
+                            # 안전 crop
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(w, x2), min(h, y2)
+                            if x2 <= x1 or y2 <= y1:
+                                continue
+                            hand_boxes.append((x1, y1, x2, y2))
+
+                    # ---------------- 얼굴/손 영역 중 큰 영역만 처리 ----------------
+                    candidate = []
+                    for x1, y1, x2, y2, label, conf in face_boxes:
+                        area = (x2-x1)*(y2-y1)
+                        candidate.append(('face', area, (x1, y1, x2, y2, label, conf)))
+                    for x1, y1, x2, y2 in hand_boxes:
+                        area = (x2-x1)*(y2-y1)
+                        candidate.append(('hand', area, (x1, y1, x2, y2)))
+
+                    if candidate:
+                        candidate.sort(key=lambda x: x[1], reverse=True)
+                        kind, _, data = candidate[0]
+
+                        if kind == 'face':
+                            x1, y1, x2, y2, label, conf = data
+                            best_crop = frame[y1:y2, x1:x2]
+                            if self.current_state == "ACT5_PAYMENT":
+                                self.detect_expression(best_crop)
+                            # manager threshold 적용
+                            if label == "manager" and conf >= MANAGER_THRESHOLD:
+                                self.get_logger().info(f"[MANAGER] Detected at [{x1},{y1},{x2},{y2}], conf={conf:.2f}")
+                        elif kind == 'hand':
+                            x1, y1, x2, y2 = data
+                            hand_crop = frame[y1:y2, x1:x2]
+                            self.detect_hand(hand_crop)
+
+                except queue.Empty:
                     continue
-
-                # ---------------- 얼굴/주인 인식 ----------------
-                host_results = self.host_model(frame, verbose=False)
-                face_boxes = []
-                for r in host_results:
-                    for box in r.boxes:
-                        conf = float(box.conf)
-                        label = self.host_model.names[int(box.cls)]
-
-                        if label == "manager" and conf >= MANAGER_THRESHOLD:
-                            # 주인임이 확인되면 face_id 토픽 발행
-                            self.face_id_pub.publish(String(data="manager"))
-
-                        if conf < CONF_THRESHOLD:
-                            continue
-                        coords = np.ravel(box.xyxy.cpu().numpy())
-                        x1, y1, x2, y2 = [int(c) for c in coords]
-                        # 안전하게 crop
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-                        if x2 <= x1 or y2 <= y1:
-                            continue
-                        face_boxes.append((x1, y1, x2, y2, label, conf))
-
-                # ---------------- 손 인식 ----------------
-                hand_results = self.detect_hand(frame)
-                hand_boxes = []
-                if hand_results:
-                    h, w, _ = frame.shape
-                    for landmarks in hand_results:
-                        xs = [l.x for l in landmarks.landmark]
-                        ys = [l.y for l in landmarks.landmark]
-                        x1, y1 = int(min(xs)*w), int(min(ys)*h)
-                        x2, y2 = int(max(xs)*w), int(max(ys)*h)
-                        # 안전 crop
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(w, x2), min(h, y2)
-                        if x2 <= x1 or y2 <= y1:
-                            continue
-                        hand_boxes.append((x1, y1, x2, y2))
-
-                # ---------------- 얼굴/손 영역 중 큰 영역만 처리 ----------------
-                candidate = []
-                for x1, y1, x2, y2, label, conf in face_boxes:
-                    area = (x2-x1)*(y2-y1)
-                    candidate.append(('face', area, (x1, y1, x2, y2, label, conf)))
-                for x1, y1, x2, y2 in hand_boxes:
-                    area = (x2-x1)*(y2-y1)
-                    candidate.append(('hand', area, (x1, y1, x2, y2)))
-
-                if candidate:
-                    candidate.sort(key=lambda x: x[1], reverse=True)
-                    kind, _, data = candidate[0]
-
-                    if kind == 'face':
-                        x1, y1, x2, y2, label, conf = data
-                        best_crop = frame[y1:y2, x1:x2]
-                        if self.current_state == "ACT5_PAYMENT":
-                            self.detect_expression(best_crop)
-                        # manager threshold 적용
-                        if label == "manager" and conf >= MANAGER_THRESHOLD:
-                            self.get_logger().info(f"[MANAGER] Detected at [{x1},{y1},{x2},{y2}], conf={conf:.2f}")
-                    elif kind == 'hand':
-                        x1, y1, x2, y2 = data
-                        hand_crop = frame[y1:y2, x1:x2]
-                        self.detect_hand(hand_crop)
 
             except Exception as e:
                 self.get_logger().error(f"Inference error: {e}")
