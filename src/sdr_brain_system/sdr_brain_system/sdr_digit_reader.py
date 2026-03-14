@@ -15,7 +15,7 @@ class SdrDigitReaderNode(Node):
         # 1. 모델 로드 (노트북에서 만든 모델 파일 경로)
         pkg_path = get_package_share_directory("sdr_brain_system")
         model_path = os.path.join(pkg_path, "models", "finetuned_digit_model.keras")
-        self.model = keras.models.load_model(model_path)
+        self.model = keras.models.load_model(model_path, compile=False)
         
         self.digit_pub = self.create_publisher(String, '/person/digit', 10)
         self.sub = self.create_subscription(CompressedImage, '/image_raw/compressed', self.image_callback, 10)
