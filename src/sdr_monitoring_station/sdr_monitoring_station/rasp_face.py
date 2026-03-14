@@ -690,7 +690,7 @@ class Controller(Node):
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=qos_depth,
-            durability=QoSDurabilityPolicy.VOLATILE
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
         )
 
         self.face_sub = self.create_subscription(String, '/face_cmd', self.face_callback, qos)
@@ -700,6 +700,8 @@ class Controller(Node):
         self.lcd_lock = threading.Lock()
         self.buzzer_lock = threading.Lock()
         self.tail_lock = threading.Lock()
+
+        self.get_logger().info('🚀 LCD 하드웨어 초기화 중...')
 
         # 서보 2개
         self.tail_up = AngularServo(

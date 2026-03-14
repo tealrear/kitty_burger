@@ -192,14 +192,26 @@ def main(args=None):
 
     # ROS 2 스핀을 위한 타이머
     ros_timer = QTimer()
-    ros_timer.timeout.connect(lambda: rclpy.spin_once(node, timeout_sec=0.0))
+    ros_timer.timeout.connect(lambda: rclpy.spin_once(node, timeout_sec=0.0) if rclpy.ok() else None)
     ros_timer.start(10)
 
     try:
-        sys.exit(app.exec())
+        app.exec() # sys.exit()을 빼고 try-finally 구조로 변경
+    except KeyboardInterrupt:
+        pass
     finally:
+        # [핵심] 종료 시 정지 명령 전송 (순서 중요)
+        if rclpy.ok():
+            try:
+                stop_t = Twist()
+                node.pub.publish(stop_t) # 정지 명령
+            except:
+                pass
+        
+        # 노드 파괴 후 셧다운
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
