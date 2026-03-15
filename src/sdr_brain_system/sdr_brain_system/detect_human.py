@@ -22,6 +22,9 @@ class DetectHumanNode(Node):
     def __init__(self):
         super().__init__('detect_human_node')
 
+        # [추가] GUI에 띄울 확대 이미지(ROI) 전송용 Publisher
+        self.roi_pub = self.create_publisher(CompressedImage, '/vision/roi/compressed', 10)
+
         pkg_path = get_package_share_directory("sdr_brain_system")
         self.host_model = YOLO(os.path.join(pkg_path, "models", "hostface.pt"))
         self.expression_model = YOLO(os.path.join(pkg_path, "models", "best.pt"))
@@ -41,8 +44,21 @@ class DetectHumanNode(Node):
         self.exp_pub = self.create_publisher(String, '/person/expression', 10)
         self.face_id_pub = self.create_publisher(String, '/person/face_id', 10)
 
+        self.face_roi_pub = self.create_publisher(CompressedImage, '/person/face_roi/compressed', 10)
+        self.hand_roi_pub = self.create_publisher(CompressedImage, '/person/hand_roi/compressed', 10)
+
         threading.Thread(target=self.inference_worker, daemon=True).start()
         self.get_logger().info("🚀 [AI] 인적 탐지 노드가 정상적으로 시작되었습니다.")
+    
+    def publish_roi(self, pub, frame, x1, y1, x2, y2):
+        """찾은 영역을 잘라서 전송하는 함수"""
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0: return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = "jpeg"
+        msg.data = cv2.imencode('.jpg', roi)[1].tobytes()
+        pub.publish(msg)
 
     def state_cb(self, msg):
         self.current_state = msg.data
@@ -110,13 +126,32 @@ class DetectHumanNode(Node):
                     if self.current_state == "ACT5_PAYMENT":
                         self.exp_pub.publish(String(data=json.dumps({"expression": label})))
         return res
+    
+    def publish_debug_image(self, frame, boxes):
+        """자르지 않고 전체 화면에 사각형만 그려서 발행"""
+        try:
+            debug_frame = frame.copy() # 원본 보존을 위해 복사
+            for (x1, y1, x2, y2, label, conf) in boxes:
+                color = (0, 255, 0) if label == "manager" else (255, 0, 0)
+                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(debug_frame, f"{label}", (x1, y1-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+            msg = CompressedImage()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.format = "jpeg"
+            msg.data = cv2.imencode('.jpg', debug_frame)[1].tobytes()
+            self.roi_pub.publish(msg) # /vision/roi/compressed 로 전송
+        except Exception as e:
+            self.get_logger().error(f"Debug Publish Error: {e}")
 
     # ---------------- 메인 추론 ----------------
     def inference_worker(self):
         while rclpy.ok():
             try:
                 try:
-                    msg = self.img_queue.get(timeout=1.0)
+                    # 타임아웃을 짧게 잡아 응답성 향상
+                    msg = self.img_queue.get(timeout=0.1)
                     frame = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
                     if frame is None or frame.size == 0:
                         self.get_logger().warn("Empty frame received, skipping...")
@@ -177,16 +212,29 @@ class DetectHumanNode(Node):
 
                         if kind == 'face':
                             x1, y1, x2, y2, label, conf = data
+
                             best_crop = frame[y1:y2, x1:x2]
                             if self.current_state == "ACT5_PAYMENT":
                                 self.detect_expression(best_crop)
                             # manager threshold 적용
                             if label == "manager" and conf >= MANAGER_THRESHOLD:
+                                self.face_id_pub.publish(String(data="manager"))
                                 self.get_logger().info(f"[MANAGER] Detected at [{x1},{y1},{x2},{y2}], conf={conf:.2f}")
                         elif kind == 'hand':
                             x1, y1, x2, y2 = data
+                            
                             hand_crop = frame[y1:y2, x1:x2]
                             self.detect_hand(hand_crop)
+
+                        # 모든 탐지된 박스 정보를 리스트로 취합
+                        all_detects = []
+                        for fb in face_boxes:
+                            all_detects.append(fb) # [x1, y1, x2, y2, label, conf]
+                        for hb in hand_boxes:
+                            all_detects.append((hb[0], hb[1], hb[2], hb[3], "hand", 1.0))
+                        
+                        # 확대하지 않고 박스만 그려서 발행
+                        self.publish_debug_image(frame, all_detects)
 
                 except queue.Empty:
                     continue

@@ -44,26 +44,49 @@ class Tsar_Node(Node):
         self.battery_sub = self.create_subscription(BatteryState, '/battery_state', self.cb_battery, qos)
         
         # 영상 스트리밍 구독 추가
-        self.latest_frame = None
-        self.image_sub = self.create_subscription(
-            CompressedImage,
-            '/vision/processed/compressed',
-            self.cb_image,
-            10
-        )
+        self.current_state = "ACT0_SLEEPY"
+        self.current_state = "ACT0_SLEEPY" # 현재 상태 저장 변수
+
+        # 1. 미션 상태 구독 추가
+        self.state_sub = self.create_subscription(String, '/mission_state', self.cb_state, 10)
+
+        # 2. 모든 영상 토픽 구독 (이름만 다르게)
+        # 메인 뷰 (C++에서 쏘는 것)
+        self.create_subscription(CompressedImage, '/vision/processed/compressed', 
+                                 lambda msg: self.image_router(msg, "MAIN"), 10)
+        # AI 뷰 (얼굴/손 ROI - detect_human에서 쏘는 것)
+        self.create_subscription(CompressedImage, '/vision/roi/compressed', 
+                                 lambda msg: self.image_router(msg, "AI"), 10)
+        # 숫자 뷰 (숫자 박스 - digit_reader에서 쏘는 것)
+        self.create_subscription(CompressedImage, '/vision/digit_debug/compressed', 
+                                 lambda msg: self.image_router(msg, "DIGIT"), 10)
+
+    def cb_state(self, msg): self.current_state = msg.data
+
+    # 상태에 따라 latest_frame에 저장될 이미지를 선택
+    def image_router(self, msg, source):
+        """현재 상태에 맞는 영상원만 latest_frame에 업데이트함"""
+        # 상태별 우선순위 로직
+        should_update = False
+        
+        if self.current_state == "ACT3_AUTHENTICATE" and source == "AI":
+            should_update = True
+        elif self.current_state == "ACT4_DELIVERY" and source == "DIGIT":
+            should_update = True
+        elif source == "MAIN" and self.current_state not in ["ACT3_AUTHENTICATE", "ACT4_DELIVERY"]:
+            should_update = True
+
+        if should_update:
+            try:
+                arr = np.frombuffer(msg.data, np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    self.latest_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                self.get_logger().error(f"Router Error: {e}")
 
     def cb_battery(self, msg: BatteryState):
         self.battery = msg
-
-    def cb_image(self, msg: CompressedImage):
-        try:
-            arr = np.frombuffer(msg.data, np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is not None:
-                # BGR -> RGB 변환하여 저장
-                self.latest_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        except Exception as e:
-            self.get_logger().error(f"Image Decode Error: {e}")
 
 class MainWindow(QMainWindow):
     def __init__(self, tsar_node: Tsar_Node):
@@ -108,25 +131,18 @@ class MainWindow(QMainWindow):
         self.video_timer.start(33)
 
     def update_video_stream(self):
-        """현재 활성화된 페이지에 따라 영상을 출력합니다."""
-        if self.tsar.latest_frame is None:
-            return
-
-        frame = self.tsar.latest_frame
+        """메인 카메라 영상을 camera_label에 업데이트합니다."""
+        if self.tsar.latest_frame is not None:
+            self.set_image_to_label(self.tsar.latest_frame, self.ui.camera_label)
+    
+    def set_image_to_label(self, frame, label):
+        """이미지 데이터를 Qt Pixmap으로 변환하여 라벨에 출력합니다."""
         h, w, ch = frame.shape
-        bytes_per_line = ch * w
-        qimg = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        qimg = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg)
-
-        curr_idx = self.ui.stackedWidget.currentIndex()
-
-        if curr_idx == 0:  # 0페이지: face_label
-            scaled_pixmap = pixmap.scaled(self.ui.face_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.ui.face_label.setPixmap(scaled_pixmap)
-        elif curr_idx == 1:  # 1페이지: camera_label
-            scaled_pixmap = pixmap.scaled(self.ui.camera_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.ui.camera_label.setPixmap(scaled_pixmap)
-
+        # 라벨 크기에 맞춰 비율 유지하며 출력
+        label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    
     def update_battery_label(self):
         if self.tsar.battery is None:
             self.ui.battery_label.setText("Battery: no data")
