@@ -5,6 +5,7 @@ from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import LaserScan # 라이다 사용을 위한 임포트
 from rclpy.qos import qos_profile_sensor_data # 상단에 추가
 
+# 
 class SdrMissionController(Node):
     def __init__(self):
         super().__init__('sdr_mission_controller')
@@ -40,6 +41,8 @@ class SdrMissionController(Node):
         self.last_sent_face = ""
         self.last_sent_buzzer = ""
         self.last_sent_tail = ""
+
+        self.gesture_count = 0
 
         # 구독 설정
         self.create_subscription(String, '/vision_fast_data', self.vision_cb, 10)
@@ -147,16 +150,15 @@ class SdrMissionController(Node):
             else:
                 self.state = "ACT2_WAIT"
                 self.wait_start_time = now
-                self.send_robot_cmd(face="suspicious", tail="stop") # 경계하는 표정으로 대기
 
         # 3단계: 대기 및 장애물 제거 확인
         elif self.state == "ACT2_WAIT":
-            self.send_robot_cmd(face="suspicious") # 아직 경계 중
+            self.send_robot_cmd(face="suspicious", tail="stop") # 경계하는 표정으로 대기
 
             # 비전과 라이다 모두 장애물이 없다고 판단할 때
             if not has_obstacle:
                 self.get_logger().info("✅ 장애물 제거 확인! 숫자를 보여주세요.")
-                self.send_robot_cmd(face="greeting", buzzer="happy", tail="friendly")
+                self.send_robot_cmd(face="happy", buzzer="happy", tail="friendly")
                 
                 # 중요: 장애물이 치워진 순간 이전의 숫자 데이터는 무시하도록 초기화
                 self.current_digit = "none" 
@@ -171,6 +173,7 @@ class SdrMissionController(Node):
         # 우회 로직 - 여기에는 자율주행을 붙일 예정
         elif self.state == "ACT2_BYPASS":
             self.get_logger().info("우회 로직")
+            self.send_robot_cmd(face="angry")
             self.munchi_count += 1
             if self.munchi_count < 20: t.angular.z = 1.2
             elif self.munchi_count < 60: t.linear.x = 0.15
@@ -182,23 +185,29 @@ class SdrMissionController(Node):
         # [핵심 추가] 4. 주인 인증 (이리와!)
         elif self.state == "ACT3_AUTHENTICATE":
             self.get_logger().info("주인 인증")
-            self.send_face("suspicious") # "누구지?" 하는 궁금한 표정
+            self.send_robot_cmd(face="veyes")
             print("current_gesture : ", self.current_gesture)
             print("current_face : ", self.current_face)
-            if self.current_face == "manager" or self.current_gesture in ["엄지척", "보"]:
-                self.get_logger().info("👋 주인님 확인! 반가워요!")
-                self.send_robot_cmd(face="hearteye", buzzer="happy", tail="friendly")
-                self.state = "ACT4_DELIVERY"
-                self.current_digit = "none" # 숫자 데이터 초기화
+            if self.current_face == "manager" or self.current_gesture in ["브이", "보"]:
+                self.gesture_count += 1
             else:
                 # 대기 중에는 가끔 눈을 깜박임
                 if int(now) % 4 == 0: self.send_robot_cmd(face="blink")
+                self.gesture_count = 0 # 인식이 끊기면 초기화
+
+            # 10번 연속(약 1초) 인식 성공 시에만 다음 단계로
+            if self.gesture_count >= 10:
+                self.get_logger().info("👋 주인님 확인 완료!")
+                self.send_robot_cmd(face="greeting", buzzer="happy")
+                self.state = "ACT4_DELIVERY"
+                self.gesture_count = 0
 
         # 5. 숫자 인식 대기
         elif self.state == "ACT4_DELIVERY":
+            self.get_logger().info("숫자 인식 대기")
             if self.current_digit in ["1", "3", "9"]:
                 self.move_duration = 3.0 if self.current_digit == "1" else 6.0 if self.current_digit == "3" else 9.0
-                self.send_robot_cmd(face="veyes", buzzer="happy")
+                self.send_robot_cmd(face="neutral")
                 self.state = "ACT4_MOVING"; self.wait_start_time = now
 
         # 6. 배달 이동
@@ -215,7 +224,7 @@ class SdrMissionController(Node):
             self.get_logger().info("배달지 도착 후 5초간 회전")
             if now - self.wait_start_time < 5.0: # 5초 동안
                 t.angular.z = 1.5 # 뺑글뺑글 회전
-                self.send_robot_cmd(face="veyes", tail="friendly") # 회전하는 동안 윙크 표정
+                self.send_robot_cmd(face="happy", tail="friendly") # 회전하는 동안 윙크 표정
             else:
                 self.get_logger().info("🛑 회전 종료, 결제 대기")
                 self.state = "ACT5_PAYMENT"
@@ -230,8 +239,8 @@ class SdrMissionController(Node):
             else: self.send_face("wink")
             
             # 쓰다듬기 감지
-            if self.current_gesture == "쓰다듬기":
-                self.get_logger().info("🥰 주인님의 손길! 행복해요!")
+            if self.current_gesture == "엄지척":
+                self.get_logger().info("🥰 주인님의 엄지! 행복해요!")
                 self.send_face("hearteye")
                 self.state = "ACT6_HAPPY_DANCE"; self.wait_start_time = now
 
