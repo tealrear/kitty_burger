@@ -7,7 +7,13 @@ package_name = 'sdr_brain_system'
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=[
+        package_name,
+        package_name + '.mission',
+        package_name + '.digit',
+        package_name + '.vision',
+        package_name + '.common',
+    ],
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -28,9 +34,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'detect_human = sdr_brain_system.detect_human:main',
-            'sdr_mission_controller = sdr_brain_system.sdr_mission_controller:main',
-            'sdr_digit_reader = sdr_brain_system.sdr_digit_reader:main',
+            'detect_human = sdr_brain_system.vision.detect_human:main',
+            'mission_controller = sdr_brain_system.mission.controller:main',
+            'digit_reader = sdr_brain_system.digit.reader_node:main',
         ],
     },
 )

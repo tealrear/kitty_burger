@@ -1,0 +1,29 @@
+import rclpy
+
+# QoS 설정
+QOS_MISSION = rclpy.qos.QoSProfile(
+    reliability=rclpy.qos.QoSReliabilityPolicy.RELIABLE,
+    history=rclpy.qos.QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+    durability=rclpy.qos.QoSDurabilityPolicy.TRANSIENT_LOCAL
+)
+
+# 하드웨어 설정
+LIDAR_SAFE_DISTANCE = 0.5
+
+# 상태 명칭 (오타 방지용 상수)
+ACT0_SLEEPY = "ACT0_SLEEPY"
+ACT1_ALARM = "ACT1_ALARM"
+ACT2_WAIT = "ACT2_WAIT"
+ACT2_BYPASS = "ACT2_BYPASS"
+ACT3_AUTHENTICATE = "ACT3_AUTHENTICATE"
+ACT4_DELIVERY = "ACT4_DELIVERY"
+ACT4_MOVING = "ACT4_MOVING"
+ACT4_ARRIVED_SPIN = "ACT4_ARRIVED_SPIN"
+ACT5_PAYMENT = "ACT5_PAYMENT"
+ACT6_GREAT = "ACT6_GREAT"
+ACT7_HAPPY_DANCE = "ACT7_HAPPY_DANCE"
+
+# 거리 및 시간 상수
+LIDAR_SAFE_DIST = 0.5
+STABLE_DELAY = 2.0

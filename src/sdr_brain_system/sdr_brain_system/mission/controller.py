@@ -1,0 +1,229 @@
+import rclpy, time, json
+from rclpy.node import Node
+from std_msgs.msg import String
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
+
+from .constants import *
+from .utils import StateFilter, RobotCommandManager
+
+class SdrMissionController(Node):
+    def __init__(self):
+        super().__init__('sdr_mission_controller')
+        
+        # 유틸리티 초기화
+        self.filter = StateFilter()
+        self.robot = RobotCommandManager(self)
+        
+        self.state = ACT0_SLEEPY
+        self.last_state = None
+        self.state_start_time = time.time()
+        self._init_variables()
+        self._init_comms()
+
+        self.create_timer(0.1, self.main_loop)
+        self.get_logger().info("🚀 [SDR] 모듈화된 미션 컨트롤러 가동")
+
+    def _init_variables(self):
+        self.last_obj, self.lidar_obstacle = "NONE", False
+        self.current_face, self.current_gesture = "none", "none"
+        self.current_digit, self.current_expression = "none", "none"
+        self.munchi_count, self.wait_start_time, self.move_duration = 0, 0, 0
+
+    def _init_comms(self):
+        # 구독
+        self.create_subscription(String, '/vision_fast_data', self.vision_cb, 10)
+        self.create_subscription(String, '/person/digit', self.digit_cb, 10)
+        self.create_subscription(String, '/person/hand', self.hand_cb, 10)
+        self.create_subscription(String, '/person/face_id', self.face_cb, 10)
+        self.create_subscription(LaserScan, '/scan', self.lidar_cb, qos_profile_sensor_data)
+        # 발행
+        self.face_pub = self.create_publisher(String, '/face_cmd', QOS_MISSION)
+        self.buzzer_pub = self.create_publisher(String, '/buzzer_cmd', QOS_MISSION)
+        self.tail_pub = self.create_publisher(String, '/tail_cmd', QOS_MISSION)
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', QOS_MISSION)
+        self.state_pub = self.create_publisher(String, '/mission_state', QOS_MISSION)
+
+    def main_loop(self):
+        now = time.time()
+        t = Twist()
+
+        # 상태 전환 감지
+        if self.state != self.last_state:
+            self.get_logger().info(f"🔄 상태 변경: {self.last_state} -> {self.state}")
+            self.state_start_time, self.last_state = now, self.state
+            self.last_obj = "NONE"
+            self.filter.timers.clear()
+
+        is_stable = (now - self.state_start_time) > STABLE_DELAY
+        has_obstacle = (self.last_obj == "BLUE" or self.lidar_obstacle)
+        self.state_pub.publish(String(data=self.state))
+
+                # 1단계: 졸음 주행
+        if self.state == ACT0_SLEEPY:
+            self.get_logger().info("꾸벅꾸벅 조는 표정")
+            self.robot.send(face="sleepy", tail="stop") # 꾸벅꾸벅 조는 표정
+            t.linear.x = 0.01
+            t.angular.z = 0.1 if int(now * 2) % 2 == 0 else -0.1
+
+            # 장애물이 있으면
+            if has_obstacle:
+                self.get_logger().info("⚠️ 장애물 감지! 후퇴 모드 진입")
+                self.state = ACT1_ALARM
+                self.munchi_count = 0
+
+        # 2단계: 장애물 발견 및 3단 후퇴
+        elif self.state == ACT1_ALARM:
+            self.get_logger().info("놀란 표정")
+            self.robot.send(face="surprise", buzzer="warning")
+            self.munchi_count += 1
+            print(f"self.munchi_count: {self.munchi_count}")
+            if (self.munchi_count // 10) < 3: 
+                t.linear.x = -0.15 if self.munchi_count % 10 < 5 else 0.0
+            else:
+                self.state = ACT2_WAIT
+                self.wait_start_time = now
+
+        # 3단계: 대기 및 장애물 제거 확인
+        elif self.state == ACT2_WAIT:
+            self.robot.send(face="suspicious", tail="stop") # 경계하는 표정으로 대기
+
+            # 비전과 라이다 모두 장애물이 없다고 판단할 때
+            if not has_obstacle:
+                self.get_logger().info("✅ 장애물 제거 확인! 숫자를 보여주세요.")
+                self.robot.send(face="happy", buzzer="happy", tail="friendly")
+                
+                # 중요: 장애물이 치워진 순간 이전의 숫자 데이터는 무시하도록 초기화
+                self.current_digit = "none" 
+                self.state = ACT3_AUTHENTICATE # 주인 인증 단계로!
+                self.wait_start_time = now
+                
+            elif now - self.wait_start_time > 10.0: # 10초 무응답 시 우회
+                self.get_logger().info("🔄 경로 우회 자율주행 모드 전환")
+                self.state = ACT2_BYPASS
+                self.munchi_count = 0
+
+        # 우회 로직 - 여기에는 자율주행을 붙일 예정
+        elif self.state == ACT2_BYPASS:
+            self.get_logger().info("우회 로직")
+            self.robot.send(face="angry")
+            self.munchi_count += 1
+            if self.munchi_count < 20: t.angular.z = 1.2
+            elif self.munchi_count < 60: t.linear.x = 0.15
+            elif self.munchi_count < 80: t.angular.z = -1.2
+            else: 
+                self.robot.send(face="neutral", buzzer="happy")
+                self.state = ACT3_AUTHENTICATE
+
+        # [핵심 추가] 4. 주인 인증 (이리와!)
+        elif self.state == ACT3_AUTHENTICATE:
+            if not is_stable:
+                return
+            self.get_logger().info("주인 인증")
+            self.robot.send(face="veyes")
+            print("current_gesture : ", self.current_gesture)
+            print("current_face : ", self.current_face)
+            if self.current_face == "manager" or self.current_gesture in ["브이", "보"]:
+                self.get_logger().info("👋 주인님 확인 완료!")
+                self.robot.send(face="greeting", buzzer="happy")
+                self.state = ACT4_DELIVERY
+            else:
+                # 대기 중에는 가끔 눈을 깜박임
+                if int(now) % 4 == 0: self.robot.send(face="blink")
+
+        # 5. 숫자 인식 대기
+        if self.state == ACT4_DELIVERY:
+            # 1. 시나리오 전환 후 2초 대기 (배경 인식 방지)
+            if not is_stable:
+                self.robot.send(face="blink")
+                return
+
+            # 2. 숫자가 1초 동안 똑같이 보여야 확정
+            if self.filter.is_confirmed("digit", self.current_digit, threshold=1.0):
+                self.get_logger().info(f"✅ 숫자 {self.current_digit} 확정!")
+                if self.current_digit in ["1", "3", "9"]:
+                    self.move_duration = 3.0 if self.current_digit == "1" else 6.0 if self.current_digit == "3" else 9.0
+                    self.robot.send(face="neutral")
+                    self.state = ACT4_MOVING
+                    self.wait_start_time = now
+            else:
+                self.get_logger().info(f"🔢 숫자 인식 중... ({self.current_digit})", once=True)
+
+        # 6. 배달 이동 (자율주행)
+        elif self.state == ACT4_MOVING:
+            self.get_logger().info("배달 이동 및 도착 회전")
+            if now - self.wait_start_time < self.move_duration:
+                t.linear.x = 0.02
+            else:
+                self.state = ACT4_ARRIVED_SPIN; self.wait_start_time = now
+
+        # [추가된 로직] 4-2. 배달지 도착 후 5초간 회전
+        elif self.state == ACT4_ARRIVED_SPIN:
+            self.get_logger().info("배달지 도착 후 5초간 회전")
+            if now - self.wait_start_time < 5.0: # 5초 동안
+                t.angular.z = 0.5 # 뺑글뺑글 회전
+                self.robot.send(face="happy", tail="friendly")
+            else:
+                self.get_logger().info("🛑 회전 종료, 결제 대기")
+                self.state = ACT5_PAYMENT
+
+        # 7. 결제 및 쓰다듬기 상호작용
+        elif self.state == ACT5_PAYMENT:
+            # 1. 안정화 대기 (상태 전환 후 2초간 무시)
+            if not is_stable:
+                self.robot.send(face="blink")
+                return
+
+            # [중요] C++ 노드와 라벨 이름을 반드시 맞추세요 (BLUE, GREEN, YELLOW)
+            # 표정 매핑 딕셔너리 (코드 효율화)
+            payment_config = {
+                "MONEY_GREEN":  {"face": "thankyou", "buzzer": "happy"},
+                "MONEY_YELLOW": {"face": "money",    "buzzer": "happy"},
+                "MONEY_BLUE":   {"face": "cry",      "buzzer": "warning"} # 천원(BLUE)은 울기
+            }
+
+            # 2. 색상이 0.5초 동안 유지되어야 인정
+            if self.filter.is_confirmed("money", self.last_obj, threshold=0.5):
+                if self.last_obj in payment_config:
+                    cfg = payment_config[self.last_obj]
+                    self.robot.send(face=cfg["face"], buzzer=cfg["buzzer"])
+                    self.state = ACT6_GREAT
+                    self.get_logger().info(f"💰 결제 완료: {self.last_obj} -> 다음 단계로!")
+            else: self.robot.send(face="blink")
+
+        elif self.state == ACT6_GREAT:
+            if not is_stable:
+                return
+            
+            # 3. 엄지척도 2초는 유지되어야 댄스 시작
+            if self.current_gesture == "엄지척":
+                self.robot.send(face="hearteye", buzzer="happy")
+                self.state = ACT7_HAPPY_DANCE
+                self.wait_start_time = now  
+
+        # 8. 행복한 댄스
+        elif self.state == ACT7_HAPPY_DANCE:
+            self.robot.send(face="hearteye", tail="friendly")
+            t.angular.z = 0.5
+            if now - self.wait_start_time > 3.0:
+                self.state = ACT0_SLEEPY
+
+        self.cmd_pub.publish(t)
+
+    # 콜백 함수들... (기존과 동일)
+    def vision_cb(self, msg): self.last_obj = msg.data.split(':')[0]
+    def digit_cb(self, msg): self.current_digit = msg.data
+    def hand_cb(self, msg):
+        try: self.current_gesture = json.loads(msg.data).get("gesture", "none")
+        except: pass
+    def face_cb(self, msg): self.current_face = msg.data
+    def lidar_cb(self, msg):
+        front = msg.ranges[0:15] + msg.ranges[-15:]
+        valid = [r for r in front if r > 0.05]
+        if valid: self.lidar_obstacle = min(valid) < LIDAR_SAFE_DISTANCE
+
+def main(args=None):
+    rclpy.init(args=args)
+    rclpy.spin(SdrMissionController())
+    rclpy.shutdown()

@@ -24,10 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # 실행 명령: ros2 run sdr_monitoring_station gui_node
-            'gui_node = sdr_monitoring_station.gui_node:main',
-            'GUI_Client = sdr_monitoring_station.GUI_Client:main',
-            'rasp_face = sdr_monitoring_station.rasp_face:main',
+            # 파일명이 gui_node.py이고 그 안에 def main()이 있어야 합니다.
+            'gui_node = sdr_monitoring_station.gui_node:main', 
         ],
     },
 )

@@ -55,7 +55,7 @@ class DetectHumanNode(Node):
 
     def image_callback(self, msg):
         # AI가 작동해야 하는 상태에서만 큐에 데이터 삽입
-        if self.current_state in ["ACT3_AUTHENTICATE", "ACT5_PAYMENT"]:
+        if self.current_state in ["ACT3_AUTHENTICATE", "ACT5_PAYMENT", "ACT6_GREAT"]:
             if self.img_queue.empty():
                 self.img_queue.put(msg)
 
@@ -130,7 +130,7 @@ class DetectHumanNode(Node):
             msg = CompressedImage()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.format = "jpeg"
-            msg.data = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
+            msg.data = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 30])[1].tobytes()
             self.roi_pub.publish(msg) # /vision/roi/compressed 로 전송
         except Exception as e:
             self.get_logger().error(f"Debug Publish Error: {e}")
