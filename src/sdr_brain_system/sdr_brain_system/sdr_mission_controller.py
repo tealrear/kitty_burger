@@ -168,16 +168,17 @@ class SdrMissionController(Node):
 
         # [추가] 1. 상태가 바뀌었는지 감지 (바뀌는 순간 타이머 리셋)
         if self.state != self.last_state:
-            self.get_logger().info(f"🔄 상태 변경 감지: {self.last_state} -> {self.state}")
+            self.get_logger().info(f"🔄 상태 변경 감지: {self.last_state} -> {self.state},  last_obj is {self.last_obj}")
             self.state_start_time = now
+            self.last_obj = "NONE" # 이전 단계의 색상 기억 삭제
             self.last_state = self.state
             self.confirm_timers.clear() # 상태가 바뀌면 모든 인식 대기열 초기화
 
-        # [추가] 2. 상태 전환 후 '안정화 시간' 계산 (2초)
-        is_stable = (now - self.state_start_time) > 2.0  # 2초 지나면 True
+        # [추가] 2. 상태 전환 후 '안정화 시간' 계산 (1초)
+        is_stable = (now - self.state_start_time) > 0.5  # 1초 지나면 True
 
         # 장애물 여부 종합 (비전에서 파란색 감지 OR 라이다에서 근접 물체 감지)
-        has_obstacle = (self.last_obj == "BLUE" and self.lidar_obstacle)
+        has_obstacle = (self.last_obj == "BLUE" or self.lidar_obstacle)
         print(f"Lidar: {self.lidar_obstacle}, Vision: {self.last_obj}, Combined: {has_obstacle}")
 
         # 현재 상태 브로드캐스팅
@@ -242,33 +243,29 @@ class SdrMissionController(Node):
 
         # [핵심 추가] 4. 주인 인증 (이리와!)
         elif self.state == "ACT3_AUTHENTICATE":
+            if not is_stable:
+                return
             self.get_logger().info("주인 인증")
             self.send_robot_cmd(face="veyes")
             print("current_gesture : ", self.current_gesture)
             print("current_face : ", self.current_face)
             if self.current_face == "manager" or self.current_gesture in ["브이", "보"]:
-                self.gesture_count += 1
-            else:
-                # 대기 중에는 가끔 눈을 깜박임
-                if int(now) % 4 == 0: self.send_robot_cmd(face="blink")
-                self.gesture_count = 0 # 인식이 끊기면 초기화
-
-            # 10번 연속(약 1초) 인식 성공 시에만 다음 단계로
-            if self.gesture_count >= 10:
                 self.get_logger().info("👋 주인님 확인 완료!")
                 self.send_robot_cmd(face="greeting", buzzer="happy")
                 self.state = "ACT4_DELIVERY"
-                self.gesture_count = 0
+            else:
+                # 대기 중에는 가끔 눈을 깜박임
+                if int(now) % 4 == 0: self.send_robot_cmd(face="blink")
 
         # 5. 숫자 인식 대기
         if self.state == "ACT4_DELIVERY":
             # 1. 시나리오 전환 후 2초 대기 (배경 인식 방지)
-            if not self.is_scenario_stable(now, delay=2.0):
-                self.send_robot_cmd(face="wink")
+            if not is_stable:
+                self.send_robot_cmd(face="blink")
                 return
 
             # 2. 숫자가 2초 동안 똑같이 보여야 확정
-            if self.is_value_confirmed("digit", self.current_digit, now, threshold=2.0):
+            if self.is_value_confirmed("digit", self.current_digit, now, threshold=1.0):
                 self.get_logger().info(f"✅ 숫자 {self.current_digit} 확정!")
                 if self.current_digit in ["1", "3", "9"]:
                     self.move_duration = 3.0 if self.current_digit == "1" else 6.0 if self.current_digit == "3" else 9.0
@@ -298,30 +295,41 @@ class SdrMissionController(Node):
 
         # 7. 결제 및 쓰다듬기 상호작용
         elif self.state == "ACT5_PAYMENT":
-            # 1. 안정화 대기
-            if not self.is_scenario_stable(now, delay=2.0):
+            # 1. 안정화 대기 (상태 전환 후 2초간 무시)
+            if not is_stable:
                 self.send_robot_cmd(face="blink")
                 return
 
+            # [중요] C++ 노드와 라벨 이름을 반드시 맞추세요 (BLUE, GREEN, YELLOW)
+            # 표정 매핑 딕셔너리 (코드 효율화)
+            payment_config = {
+                "GREEN":  {"face": "thankyou", "buzzer": "happy"},
+                "YELLOW": {"face": "money",    "buzzer": "happy"},
+                "BLUE":   {"face": "cry",      "buzzer": "warning"} # 천원(BLUE)은 울기
+            }
+
             # 2. 색상이 2초 동안 유지되어야 인정
-            if self.is_value_confirmed("color", self.last_obj, now, threshold=2.0):
-                if self.last_obj == "MONEY_GREEN":
-                    self.send_robot_cmd(face="thankyou", buzzer="happy")
-                    self.state == "ACT6_GREAT"
-                elif self.last_obj == "MONEY_YELLOW":
-                    self.send_robot_cmd(face="money", buzzer="happy")
-                    self.state == "ACT6_GREAT"
-                elif self.last_obj == "MONEY_BLUE":
-                    # [핵심] 천원권을 주면 우는 표정
-                    self.get_logger().info("😢 천원이라니... 너무 적어요!")
-                    self.send_robot_cmd(face="cry", buzzer="warning")
-                    self.state == "ACT6_GREAT"
+            if self.is_value_confirmed("money", self.last_obj, now, threshold=1.0):
+                # 감지된 색상이 매핑 테이블에 있는지 확인
+                if self.last_obj in payment_config:
+                    cfg = payment_config[self.last_obj]
+                    self.send_robot_cmd(face=cfg["face"], buzzer=cfg["buzzer"])
+                    
+                    # [주의] == 가 아니라 = 입니다! (상태 전환)
+                    self.state = "ACT6_GREAT" 
+                    self.get_logger().info(f"💰 결제 완료: {self.last_obj} -> 다음 단계로!")
+            else:
+                # 확정 전까지는 대기 표정
+                self.send_robot_cmd(face="blink")
 
             
 
         elif self.state == "ACT6_GREAT":
+            if not is_stable:
+                return
+            
             # 3. 엄지척도 2초는 유지되어야 댄스 시작
-            if self.is_value_confirmed("gesture", self.current_gesture, now, threshold=2.0):
+            if self.is_value_confirmed("gesture", self.current_gesture, now, threshold=1.0):
                 if self.current_gesture == "엄지척":
                     self.send_robot_cmd(face="hearteye", buzzer="happy")
                     self.state = "ACT7_HAPPY_DANCE"
