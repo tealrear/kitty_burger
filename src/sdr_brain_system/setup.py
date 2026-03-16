@@ -29,7 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'detect_human = sdr_brain_system.detect_human:main',
-            'mission_controller = sdr_brain_system.sdr_mission_controller:main',
+            'sdr_mission_controller = sdr_brain_system.sdr_mission_controller:main',
             'sdr_digit_reader = sdr_brain_system.sdr_digit_reader:main',
         ],
     },
