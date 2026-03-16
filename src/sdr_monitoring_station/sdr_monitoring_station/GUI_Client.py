@@ -4,9 +4,12 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
 
-from PySide6.QtWidgets import QApplication, QMainWindow
-from PySide6.QtCore import QTimer,Qt
+from PySide6.QtWidgets import QApplication, QMainWindow,QVBoxLayout#(추가 03/16)
+from PySide6.QtCore import QTimer,Qt,QUrl #(추가 03/16)
 from PySide6.QtGui import QPixmap
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput,  QMediaPlayer #추가 03/16
+from PySide6.QtMultimediaWidgets import QVideoWidget #추가 03/16
+
 
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSHistoryPolicy, QoSReliabilityPolicy
 from.gui_ui import Ui_Form
@@ -104,6 +107,41 @@ class MainWindow(QMainWindow):
         self.battery_timer.timeout.connect(self.update_battery_label)
         self.battery_timer.start(200)
 
+        #동영상 출력----------------------------------03/16-----------------------------------------------------------
+        self.video_widget = QVideoWidget() #영상을 화면에 보여주는 칸
+        self.video_layout = QVBoxLayout(self.ui.face_widget)
+        self.video_layout.setContentsMargins(0, 0, 0, 0)#빈 테두리 공간 없이 꽉 차게 넣겠다
+        self.video_layout.addWidget(self.video_widget)
+
+        self.audio_output = QAudioOutput()#소리 출력 장치 객체
+        self.media_player = QMediaPlayer(self)#상위 개념은 QMediaPlayer
+        self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)#상태 변화 감지 후 함수 연결
+
+        self.audio_output.setVolume(0.0)   # 소리 끄기
+
+    def on_media_status_changed(self, status):
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self.clear_video()
+
+    def clear_video(self):
+        self.media_player.stop()#현재 재생 중이면 멈춰.
+        self.media_player.setSource(QUrl())#재생할 파일 경로를 빈 값으로 초기화
+        self.video_widget.hide()
+        # self.placeholder_label.show()   # placeholder_label 없으면 이 줄은 지워도 됨
+
+    def play_video(self, path: str):
+        if not os.path.exists(path):
+            print(f"파일 없음: {path}")
+            return
+
+        self.media_player.setSource(QUrl.fromLocalFile(path)) #로컬 파일 경로를 QUrl로 바꿔서 플레이어에 넣는 것
+        self.media_player.play()
+
+
+        #동영상 출력----------------------------------03/16-----------------------------------------------------------
+
     def publish_ui(self):
         msg = Twist()
         msg.linear.x = float(self.linear)
@@ -140,7 +178,7 @@ class MainWindow(QMainWindow):
             buzzer_msg.data = "danger"
         else:
             face_msg.data = text
-            tail_msg.data = "stop"
+            tail_msg.data = text
             buzzer_msg.data = "stop"
 
         self.tsar.face_pub.publish(face_msg)
@@ -149,39 +187,57 @@ class MainWindow(QMainWindow):
 
         self.face_list(face_msg.data)
 
-
-    def face_list(self,text:str):
+    def face_list(self, text: str):
         self.ui.Face_listWidget.addItem(text)
 
-        image_map = {
-            "angry": os.path.join(BASE_DIR, "face", "angry.jpg"),
-            "neutral": os.path.join(BASE_DIR, "face", "neutral.jpg"),
-            "cry": os.path.join(BASE_DIR, "face", "cry.jpg"),
-            "heart": os.path.join(BASE_DIR, "face", "heart.jpg"),
-            "message": os.path.join(BASE_DIR, "face", "message.jpg"),
-            "blink": os.path.join(BASE_DIR, "face", "blink.jpg"),
-        }
+        video_map = {
+            "angry": os.path.join(BASE_DIR, "faces", "angry.mp4"),
+            "neutral": os.path.join(BASE_DIR, "faces", "normal.mp4"),
+            "heart": os.path.join(BASE_DIR, "faces", "heart.mp4"),
+            "blink": os.path.join(BASE_DIR, "faces", "blink.mp4"),
+    }
 
-        path = image_map.get(text) #파일 경로 문자열이 들어가.
-        #"angry"라는 글자를 다시 주는 게 아니라,그 key에 대응하는 value, 즉 이미지 경로를 줘.
+        path = video_map.get(text)
 
         if not path:
-            self.ui.face_label.setText(f"이미지 없음\n{text}")
+            print(f"영상 없음: {text}")
             return
 
-        pixmap = QPixmap(path)#QPixmap은 이미지 파일을 읽어서 Qt에서 화면에 띄울 수 있는 그림 객체로 만드는 클래스야.
+        self.play_video(path)
 
-        if pixmap.isNull():
-            self.ui.face_label.setText(f"파일 없음\n{text}")
-            return
 
-        self.ui.face_label.setPixmap(
-            pixmap.scaled( # 이미지를 라벨 크기에 맞게 조절
-                self.ui.face_label.size(), # face_label의 현재 크기에 맞춤
-                Qt.KeepAspectRatio,# 이미지 비율 유지
-                Qt.SmoothTransformation # 부드럽게 크기 변환
-        )
-    )
+    # def face_list(self,text:str):
+    #     self.ui.Face_listWidget.addItem(text)
+
+    #     image_map = {
+    #         "angry": os.path.join(BASE_DIR, "faces", "angry.mp4"),
+    #         "neutral": os.path.join(BASE_DIR, "faces", "nomal.mp4"),
+    #         "cry": os.path.join(BASE_DIR, "face", "cry.jpg"),
+    #         "heart": os.path.join(BASE_DIR, "faces", "heart.mp4"),
+    #         "message": os.path.join(BASE_DIR, "face", "message.jpg"),
+    #         "blink": os.path.join(BASE_DIR, "faces", "blink.mp4"),
+    #     }
+
+    #     path = image_map.get(text) #파일 경로 문자열이 들어가.
+    #     #"angry"라는 글자를 다시 주는 게 아니라,그 key에 대응하는 value, 즉 이미지 경로를 줘.
+
+    #     if not path:
+    #         self.ui.face_label.setText(f"이미지 없음\n{text}")
+    #         return
+
+    #     pixmap = QPixmap(path)#QPixmap은 이미지 파일을 읽어서 Qt에서 화면에 띄울 수 있는 그림 객체로 만드는 클래스야.
+
+    #     if pixmap.isNull():
+    #         self.ui.face_label.setText(f"파일 없음\n{text}")
+    #         return
+
+    #     self.ui.face_label.setPixmap(
+    #         pixmap.scaled( # 이미지를 라벨 크기에 맞게 조절
+    #             self.ui.face_label.size(), # face_label의 현재 크기에 맞춤
+    #             Qt.KeepAspectRatio,# 이미지 비율 유지
+    #             Qt.SmoothTransformation # 부드럽게 크기 변환
+    #     )
+    # )
 #rasp ----------------------------------------------
 
     def btn_go_Function(self):
