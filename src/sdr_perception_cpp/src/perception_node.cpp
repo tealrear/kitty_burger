@@ -146,10 +146,17 @@ private:
             final_result = color_detector_->detect(hsv, frame, "BLUE", cv::Scalar(100, 130, 50), cv::Scalar(130, 255, 255));
         } 
         else if (current_state_ == "ACT5_PAYMENT") {
-            // 우선순위: 노랑 -> 초록 -> 파랑
-            final_result = color_detector_->detect(hsv, frame, "YELLOW", cv::Scalar(20, 100, 100), cv::Scalar(35, 255, 255));
+            // 시나리오 5: 결제 확인
+            // 1순위: 오만원권(YELLOW)
+            final_result = color_detector_->detect(hsv, frame, "MONEY_YELLOW", cv::Scalar(15, 50, 50), cv::Scalar(35, 255, 255));
+            
+            // 2순위: 만원권(GREEN)
             if (!final_result.success)
-                final_result = color_detector_->detect(hsv, frame, "GREEN", cv::Scalar(40, 50, 50), cv::Scalar(80, 255, 255));
+                final_result = color_detector_->detect(hsv, frame, "MONEY_GREEN", cv::Scalar(40, 50, 50), cv::Scalar(90, 255, 255));
+            
+            // [추가] 3순위: 천원권(BLUE) -> 감지되면 Python에서 "cry" 하도록 유도
+            if (!final_result.success)
+                final_result = color_detector_->detect(hsv, frame, "MONEY_BLUE", cv::Scalar(100, 130, 50), cv::Scalar(130, 255, 255));
         }
 
         // 결과 퍼블리싱
