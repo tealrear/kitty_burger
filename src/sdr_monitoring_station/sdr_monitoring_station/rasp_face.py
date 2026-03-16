@@ -7,11 +7,18 @@ from time import sleep
 from gpiozero import AngularServo, TonalBuzzer
 from gpiozero.tones import Tone
 import threading
+import os
+
+# pigpio 경고를 끄기 위한 환경 변수 설정 (코드 상단에 배치)
+os.environ['GPIOZERO_PIN_FACTORY'] = 'pigpio'
 
 # =========================
 # LCD / BUZZER 전역 장치
 # =========================
-lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
+try:
+    lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
+except:
+    print("LCD를 찾을 수 없습니다. 주소를 확인하세요.")
 buzzer = TonalBuzzer(19)   # BCM GPIO19
 
 # =========================
@@ -683,7 +690,7 @@ class Controller(Node):
     def __init__(self):
         super().__init__('controller')
 
-        self.declare_parameter('qos_depth', 10)
+        self.declare_parameter('qos_depth', 1)
         qos_depth = self.get_parameter('qos_depth').value
 
         qos = QoSProfile(
@@ -698,27 +705,32 @@ class Controller(Node):
         self.tail_sub = self.create_subscription(String, '/tail_cmd', self.tail_callback, qos)
 
         self.lcd_lock = threading.Lock()
+        self.current_face_cmd = "" # 현재 실행 중인 표정 저장
+
         self.buzzer_lock = threading.Lock()
         self.tail_lock = threading.Lock()
 
         self.get_logger().info('🚀 LCD 하드웨어 초기화 중...')
 
-        # 서보 2개
-        self.tail_up = AngularServo(
-            12,                         # 위쪽 서보
-            min_angle=-90,
-            max_angle=90,
-            min_pulse_width=0.0005,
-            max_pulse_width=0.0025
-        )
+        try:
+            # 서보 2개
+            self.tail_up = AngularServo(
+                12,                         # 위쪽 서보
+                min_angle=-90,
+                max_angle=90,
+                min_pulse_width=0.0005,
+                max_pulse_width=0.0025
+            )
 
-        self.tail_down = AngularServo(
-            13,                         # 아래쪽 서보
-            min_angle=-90,
-            max_angle=90,
-            min_pulse_width=0.0005,
-            max_pulse_width=0.0025
-        )
+            self.tail_down = AngularServo(
+                13,                         # 아래쪽 서보
+                min_angle=-90,
+                max_angle=90,
+                min_pulse_width=0.0005,
+                max_pulse_width=0.0025
+            )
+        except:
+            self.get_logger().warn("서보모터를 초기화할 수 없습니다.")
 
         self.buzzer = buzzer
 
@@ -732,7 +744,13 @@ class Controller(Node):
     # -------------------------
     def face_callback(self, msg: String):
         cmd = msg.data.strip().lower()
+
+        # [핵심] 동일한 명령이 이미 실행 중이면 무시 (LCD 부하 감소)
+        if cmd == self.current_face_cmd:
+            return
+        
         self.get_logger().info(f'Face cmd: {cmd}')
+        self.current_face_cmd = cmd
         threading.Thread(target=self.run_face, args=(cmd,), daemon=True).start()
 
     def run_face(self, cmd: str):
@@ -768,13 +786,14 @@ class Controller(Node):
         elif cmd == 'money':
             money_face_eyes(5)
 
-
         else:
             self.get_logger().warning(f'Unknown face command: {cmd}')
             lcd.clear()
             lcd.write_string("Unknown cmd")
             lcd.cursor_pos = (1, 0)
             lcd.write_string(cmd[:16])
+
+        self.current_face_cmd = ""
 
     # -------------------------
     # BUZZER
