@@ -49,16 +49,6 @@ class DetectHumanNode(Node):
 
         threading.Thread(target=self.inference_worker, daemon=True).start()
         self.get_logger().info("🚀 [AI] 인적 탐지 노드가 정상적으로 시작되었습니다.")
-    
-    def publish_roi(self, pub, frame, x1, y1, x2, y2):
-        """찾은 영역을 잘라서 전송하는 함수"""
-        roi = frame[y1:y2, x1:x2]
-        if roi.size == 0: return
-        msg = CompressedImage()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.format = "jpeg"
-        msg.data = cv2.imencode('.jpg', roi)[1].tobytes()
-        pub.publish(msg)
 
     def state_cb(self, msg):
         self.current_state = msg.data
@@ -140,7 +130,7 @@ class DetectHumanNode(Node):
             msg = CompressedImage()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.format = "jpeg"
-            msg.data = cv2.imencode('.jpg', debug_frame)[1].tobytes()
+            msg.data = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
             self.roi_pub.publish(msg) # /vision/roi/compressed 로 전송
         except Exception as e:
             self.get_logger().error(f"Debug Publish Error: {e}")

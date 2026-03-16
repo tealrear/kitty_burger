@@ -44,6 +44,20 @@ class SdrMissionController(Node):
 
         self.gesture_count = 0
 
+        # 결제 판정용 변수 추가
+        self.payment_color_start_time = 0.0
+        self.current_observed_color = "NONE"
+        self.CONFIRM_DURATION = 2.0  # 판정에 필요한 시간 (초). 5초는 너무 길 수 있어 2초로 제안합니다.
+
+        # --- 최적화용 딱 두 줄만 추가 ---
+        self.last_state = None          # 이전 상태를 기억해서 '상태 변화'를 감지함
+        self.state_start_time = time.time() # 상태가 바뀐 시점을 기록함
+
+        # --- [모듈화용 저장소] ---
+        self.confirm_timers = {} # 각 카테고리별(digit, color 등) 타이머 관리용 딕셔너리
+        self.last_state = None
+        self.state_start_time = time.time()
+
         # 구독 설정
         self.create_subscription(String, '/vision_fast_data', self.vision_cb, 10)
         self.create_subscription(String, '/person/hand', self.hand_cb, 10)
@@ -64,6 +78,40 @@ class SdrMissionController(Node):
 
         self.create_timer(0.1, self.main_loop)
         self.get_logger().info("🚀 [SDR] 장애물 제거 후 숫자 인식 시나리오 가동")
+
+    # --- [모듈 1: 시나리오 전환 후 안정화 체크] ---
+    def is_scenario_stable(self, now, delay=2.0):
+        """상태가 바뀐 후 delay만큼 시간이 지났는지 확인"""
+        return (now - self.state_start_time) > delay
+
+    # --- [모듈 2: 특정 값이 X초 동안 유지되는지 체크] ---
+    def is_value_confirmed(self, category, new_val, now, threshold=2.0):
+        """
+        category: "digit", "color", "gesture" 등
+        new_val: 현재 들어오는 센서/인식 값
+        threshold: 유지해야 하는 시간(초)
+        """
+        # 해당 카테고리가 처음 들어오면 초기화
+        if category not in self.confirm_timers:
+            self.confirm_timers[category] = {"val": None, "start_time": now}
+
+        timer_data = self.confirm_timers[category]
+
+        # 인식된 값이 없거나 "none"이면 타이머 초기화 및 False 반환
+        if new_val in ["none", "NONE", None]:
+            timer_data["val"] = new_val
+            timer_data["start_time"] = now
+            return False
+
+        # 값이 바뀌면 타이머 리셋
+        if new_val != timer_data["val"]:
+            timer_data["val"] = new_val
+            timer_data["start_time"] = now
+            return False
+
+        # 값이 똑같이 유지되고 있다면 시간 계산
+        duration = now - timer_data["start_time"]
+        return duration >= threshold
 
     def face_cb(self, msg): 
         self.current_face = msg.data
@@ -118,12 +166,23 @@ class SdrMissionController(Node):
         t = Twist()
         now = time.time()
 
-        # 현재 상태 브로드캐스팅
-        self.state_pub.publish(String(data=self.state))
+        # [추가] 1. 상태가 바뀌었는지 감지 (바뀌는 순간 타이머 리셋)
+        if self.state != self.last_state:
+            self.get_logger().info(f"🔄 상태 변경 감지: {self.last_state} -> {self.state},  last_obj is {self.last_obj}")
+            self.state_start_time = now
+            self.last_obj = "NONE" # 이전 단계의 색상 기억 삭제
+            self.last_state = self.state
+            self.confirm_timers.clear() # 상태가 바뀌면 모든 인식 대기열 초기화
+
+        # [추가] 2. 상태 전환 후 '안정화 시간' 계산 (1초)
+        is_stable = (now - self.state_start_time) > 0.5  # 1초 지나면 True
 
         # 장애물 여부 종합 (비전에서 파란색 감지 OR 라이다에서 근접 물체 감지)
-        has_obstacle = (self.last_obj == "BLUE" and self.lidar_obstacle)
+        has_obstacle = (self.last_obj == "BLUE" or self.lidar_obstacle)
         print(f"Lidar: {self.lidar_obstacle}, Vision: {self.last_obj}, Combined: {has_obstacle}")
+
+        # 현재 상태 브로드캐스팅
+        self.state_pub.publish(String(data=self.state))
 
 
         # 1단계: 졸음 주행
@@ -142,7 +201,7 @@ class SdrMissionController(Node):
         # 2단계: 장애물 발견 및 3단 후퇴
         elif self.state == "ACT1_ALARM":
             self.get_logger().info("놀란 표정")
-            self.send_robot_cmd(face="surprise", buzzer="warning", tail="angry")
+            self.send_robot_cmd(face="surprise", buzzer="warning")
             self.munchi_count += 1
             print(f"self.munchi_count: {self.munchi_count}")
             if (self.munchi_count // 10) < 3: 
@@ -184,38 +243,43 @@ class SdrMissionController(Node):
 
         # [핵심 추가] 4. 주인 인증 (이리와!)
         elif self.state == "ACT3_AUTHENTICATE":
+            if not is_stable:
+                return
             self.get_logger().info("주인 인증")
             self.send_robot_cmd(face="veyes")
             print("current_gesture : ", self.current_gesture)
             print("current_face : ", self.current_face)
             if self.current_face == "manager" or self.current_gesture in ["브이", "보"]:
-                self.gesture_count += 1
-            else:
-                # 대기 중에는 가끔 눈을 깜박임
-                if int(now) % 4 == 0: self.send_robot_cmd(face="blink")
-                self.gesture_count = 0 # 인식이 끊기면 초기화
-
-            # 10번 연속(약 1초) 인식 성공 시에만 다음 단계로
-            if self.gesture_count >= 10:
                 self.get_logger().info("👋 주인님 확인 완료!")
                 self.send_robot_cmd(face="greeting", buzzer="happy")
                 self.state = "ACT4_DELIVERY"
-                self.gesture_count = 0
+            else:
+                # 대기 중에는 가끔 눈을 깜박임
+                if int(now) % 4 == 0: self.send_robot_cmd(face="blink")
 
         # 5. 숫자 인식 대기
-        elif self.state == "ACT4_DELIVERY":
-            self.get_logger().info("숫자 인식 대기")
-            if self.current_digit in ["1", "3", "9"]:
-                self.move_duration = 3.0 if self.current_digit == "1" else 6.0 if self.current_digit == "3" else 9.0
-                self.send_robot_cmd(face="neutral")
-                self.state = "ACT4_MOVING"; self.wait_start_time = now
+        if self.state == "ACT4_DELIVERY":
+            # 1. 시나리오 전환 후 2초 대기 (배경 인식 방지)
+            if not is_stable:
+                self.send_robot_cmd(face="blink")
+                return
 
-        # 6. 배달 이동
+            # 2. 숫자가 2초 동안 똑같이 보여야 확정
+            if self.is_value_confirmed("digit", self.current_digit, now, threshold=1.0):
+                self.get_logger().info(f"✅ 숫자 {self.current_digit} 확정!")
+                if self.current_digit in ["1", "3", "9"]:
+                    self.move_duration = 3.0 if self.current_digit == "1" else 6.0 if self.current_digit == "3" else 9.0
+                    self.send_robot_cmd(face="neutral")
+                    self.state = "ACT4_MOVING"
+                    self.wait_start_time = now
+            else:
+                self.get_logger().info(f"🔢 숫자 인식 중... ({self.current_digit})", once=True)
+
+        # 6. 배달 이동 (자율주행)
         elif self.state == "ACT4_MOVING":
             self.get_logger().info("배달 이동 및 도착 회전")
             if now - self.wait_start_time < self.move_duration:
-                t.linear.x = 0.12
-                if int(now * 2) % 2 == 0: self.send_robot_cmd(face="blink")
+                t.linear.x = 0.02
             else:
                 self.state = "ACT4_ARRIVED_SPIN"; self.wait_start_time = now
 
@@ -223,38 +287,62 @@ class SdrMissionController(Node):
         elif self.state == "ACT4_ARRIVED_SPIN":
             self.get_logger().info("배달지 도착 후 5초간 회전")
             if now - self.wait_start_time < 5.0: # 5초 동안
-                t.angular.z = 1.5 # 뺑글뺑글 회전
-                self.send_robot_cmd(face="happy", tail="friendly") # 회전하는 동안 윙크 표정
+                t.angular.z = 0.5 # 뺑글뺑글 회전
+                self.send_robot_cmd(face="happy", tail="friendly")
             else:
                 self.get_logger().info("🛑 회전 종료, 결제 대기")
                 self.state = "ACT5_PAYMENT"
-                self.send_robot_cmd(face="money", tail="stop")
 
         # 7. 결제 및 쓰다듬기 상호작용
         elif self.state == "ACT5_PAYMENT":
-            self.get_logger().info("결제 및 쓰다듬기 상호작용")
-            # 돈 확인 로직
-            if self.last_obj == "GREEN": self.send_face("thankyou")
-            elif self.last_obj == "YELLOW": self.send_face("money")
-            else: self.send_face("wink")
+            # 1. 안정화 대기 (상태 전환 후 2초간 무시)
+            if not is_stable:
+                self.send_robot_cmd(face="blink")
+                return
+
+            # [중요] C++ 노드와 라벨 이름을 반드시 맞추세요 (BLUE, GREEN, YELLOW)
+            # 표정 매핑 딕셔너리 (코드 효율화)
+            payment_config = {
+                "GREEN":  {"face": "thankyou", "buzzer": "happy"},
+                "YELLOW": {"face": "money",    "buzzer": "happy"},
+                "BLUE":   {"face": "cry",      "buzzer": "warning"} # 천원(BLUE)은 울기
+            }
+
+            # 2. 색상이 2초 동안 유지되어야 인정
+            if self.is_value_confirmed("money", self.last_obj, now, threshold=1.0):
+                # 감지된 색상이 매핑 테이블에 있는지 확인
+                if self.last_obj in payment_config:
+                    cfg = payment_config[self.last_obj]
+                    self.send_robot_cmd(face=cfg["face"], buzzer=cfg["buzzer"])
+                    
+                    # [주의] == 가 아니라 = 입니다! (상태 전환)
+                    self.state = "ACT6_GREAT" 
+                    self.get_logger().info(f"💰 결제 완료: {self.last_obj} -> 다음 단계로!")
+            else:
+                # 확정 전까지는 대기 표정
+                self.send_robot_cmd(face="blink")
+
             
-            # 쓰다듬기 감지
-            if self.current_gesture == "엄지척":
-                self.get_logger().info("🥰 주인님의 엄지! 행복해요!")
-                self.send_face("hearteye")
-                self.state = "ACT6_HAPPY_DANCE"; self.wait_start_time = now
+
+        elif self.state == "ACT6_GREAT":
+            if not is_stable:
+                return
+            
+            # 3. 엄지척도 2초는 유지되어야 댄스 시작
+            if self.is_value_confirmed("gesture", self.current_gesture, now, threshold=1.0):
+                if self.current_gesture == "엄지척":
+                    self.send_robot_cmd(face="hearteye", buzzer="happy")
+                    self.state = "ACT7_HAPPY_DANCE"
+                    self.wait_start_time = now
 
         # 8. 행복한 댄스
-        elif self.state == "ACT6_HAPPY_DANCE":
+        elif self.state == "ACT7_HAPPY_DANCE":
             self.send_robot_cmd(face="hearteye", tail="friendly")
-            t.angular.z = 2.5
+            t.angular.z = 0.5
             if now - self.wait_start_time > 3.0:
                 self.state = "ACT0_SLEEPY"
 
         self.cmd_pub.publish(t)
-
-    def send_face(self, cmd): self.face_pub.publish(String(data=cmd))
-    def send_sound(self, cmd): self.sound_pub.publish(String(data=cmd))
 
 def main():
     rclpy.init()
