@@ -10,6 +10,7 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 from tensorflow.keras import layers, models
 from ament_index_python.packages import get_package_share_directory
+from .utils.digit_utils import preprocess_digit, extract_digits, DigitClassifier
 
 # [수정된 부분] utils 폴더에서 함수 가져오기
 from .utils.digit_utils import preprocess_digit, extract_digits
@@ -36,9 +37,10 @@ class SdrDigitReaderNode(Node):
         
         # 2. 추출한 가중치(Weights)만 입히기
         try:
+            # 가중치 경로 설정 및 AI 클래스 초기화
             pkg_path = get_package_share_directory("sdr_brain_system")
             weights_path = os.path.join(pkg_path, "models", "model.weights.h5")
-            self.model.load_weights(weights_path)
+            self.classifier = DigitClassifier(weights_path)
             self.get_logger().info("✅ 가중치 로드 성공! 이제 동작합니다.")
         except Exception as e:
             self.get_logger().error(f"❌ 가중치 로드 실패: {e}")
@@ -81,25 +83,19 @@ class SdrDigitReaderNode(Node):
                 h, w, _ = frame.shape
                 size = 150
                 x1, y1 = (w-size)//2, (h-size)//2
+                cv2.rectangle(frame, (x1, y1), (x1+size, y1+size), (0, 255, 0), 2)
+
                 roi = frame[y1:y1+size, x1:x1+size]
 
                 binary_raw, processed = preprocess_digit(roi)
                 digit_img = extract_digits(processed)
 
-                # [수정 포인트 2] 넘파이 배열은 'is not None'으로 명확히 체크해야 에러가 안 남
-                if digit_img is not None:
-                    # [수정 포인트 3] 반복문(for) 제거하고 바로 input_data 생성
-                    input_data = (digit_img / 255.0).reshape(1, 28, 28, 1).astype('float32')
-                    
-                    # Keras 직접 호출
-                    pred = self.model(input_data, training=False).numpy()
-                    
-                    digit = np.argmax(pred)
-                    conf = np.max(pred)
-                    
-                    if conf > 0.7:
-                        self.digit_pub.publish(String(data=str(digit)))
-                        self.get_logger().info(f"✅ 인식: {digit} ({conf:.2f})")
+                # 모듈화된 인터페이스 사용
+                digit, conf = self.classifier.predict(digit_img)
+
+                if digit is not None and conf > 0.7:
+                    self.digit_pub.publish(String(data=str(digit)))
+                    self.get_logger().info(f"✅ 인식: {digit} ({conf:.2f})")
 
                 # 디버그 영상 전송
                 proc_msg = CompressedImage()

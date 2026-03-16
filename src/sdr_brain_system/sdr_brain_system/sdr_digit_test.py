@@ -4,6 +4,7 @@ import sys
 import os
 import cv2
 import numpy as np
+from utils.digit_utils import preprocess_digit, extract_digits, DigitClassifier
 
 # [핵심] 현재 파일의 위치를 경로에 추가해서 utils를 찾을 수 있게 함
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -13,6 +14,10 @@ sys.path.append(current_dir)
 from utils.digit_utils import preprocess_digit, extract_digits
 
 def main():
+    # 가중치 파일 경로 (테스트 실행 위치에 맞게 수정 필요)
+    weights_path = "./models/model.weights.h5" 
+    classifier = DigitClassifier(weights_path)
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("카메라를 열 수 없습니다!")
@@ -43,6 +48,14 @@ def main():
         if digit_img is not None:
             # AI에게 들어가는 최종 이미지를 크게 보여줌
             cv2.imshow("4. AI Input (28x28)", cv2.resize(digit_img, (140, 140)))
+
+        digit, conf = classifier.predict(digit_img)
+
+        # 결과 시각화
+        if digit is not None:
+            color = (0, 255, 0) if conf > 0.7 else (0, 0, 255)
+            cv2.putText(frame, f"Pred: {digit} ({conf:.2f})", (x1, y1-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
