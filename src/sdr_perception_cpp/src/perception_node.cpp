@@ -2,13 +2,10 @@
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <opencv2/opencv.hpp>
-#include <opencv2/objdetect.hpp>
 
 using namespace std::chrono_literals;
 
-// =================================================================
-// 1. Data Model: 감지 결과를 담는 구조체
-// =================================================================
+// 감지 결과를 담는 구조체
 struct DetectionResult {
     bool success = false;
     std::string label = "NONE";
@@ -16,9 +13,7 @@ struct DetectionResult {
     cv::Rect rect;
 };
 
-// =================================================================
-// 2. Vision Logic: 색상 감지기 클래스 (SRP 적용)
-// =================================================================
+// 색상 감지기 클래스: BLUE, YELLOW, GREEN 추적 전용
 class ColorDetector {
 public:
     ColorDetector() {
@@ -119,7 +114,6 @@ public:
     PerceptionNode() : Node("boogi_vision_node"), frame_count_(0) {
         // 컴포넌트 초기화 (Composition)
         color_detector_ = std::make_unique<ColorDetector>();
-        human_detector_ = std::make_unique<HumanDetector>();
 
         auto qos = rclcpp::SensorDataQoS();
         img_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
@@ -151,16 +145,11 @@ private:
         if (current_state_ == "ACT0_SLEEPY" || current_state_ == "ACT1_ALARM" || current_state_ == "ACT2_WAIT") {
             final_result = color_detector_->detect(hsv, frame, "BLUE", cv::Scalar(100, 130, 50), cv::Scalar(130, 255, 255));
         } 
-        else if (current_state_ == "ACT3_AUTHENTICATE") {
-            final_result = human_detector_->detect(frame);
-        } 
         else if (current_state_ == "ACT5_PAYMENT") {
             // 우선순위: 노랑 -> 초록 -> 파랑
             final_result = color_detector_->detect(hsv, frame, "YELLOW", cv::Scalar(20, 100, 100), cv::Scalar(35, 255, 255));
             if (!final_result.success)
                 final_result = color_detector_->detect(hsv, frame, "GREEN", cv::Scalar(40, 50, 50), cv::Scalar(80, 255, 255));
-            if (!final_result.success)
-                final_result = color_detector_->detect(hsv, frame, "BLUE", cv::Scalar(100, 130, 50), cv::Scalar(130, 255, 255));
         }
 
         // 결과 퍼블리싱
@@ -175,7 +164,7 @@ private:
     }
 
     void publish_image(cv::Mat& frame) {
-        cv::line(frame, cv::Point(160, 0), cv::Point(160, 240), cv::Scalar(200, 200, 200), 1);
+        cv::line(frame, cv::Point(160, 0), cv::Point(160, 240), cv::Scalar(100, 100, 100), 1);
         std::vector<uchar> buf;
         cv::imencode(".jpg", frame, buf);
         auto img_msg = sensor_msgs::msg::CompressedImage();
@@ -187,7 +176,6 @@ private:
 
     // ROS 2 통신 객체 및 컴포넌트
     std::unique_ptr<ColorDetector> color_detector_;
-    std::unique_ptr<HumanDetector> human_detector_;
     
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr img_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_;

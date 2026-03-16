@@ -44,7 +44,7 @@ class Tsar_Node(Node):
         self.battery_sub = self.create_subscription(BatteryState, '/battery_state', self.cb_battery, qos)
         
         # 영상 스트리밍 구독 추가
-        self.current_state = "ACT0_SLEEPY"
+        self.latest_frame = None
         self.current_state = "ACT0_SLEEPY" # 현재 상태 저장 변수
 
         # 1. 미션 상태 구독 추가
@@ -73,7 +73,8 @@ class Tsar_Node(Node):
             should_update = True
         elif self.current_state == "ACT4_DELIVERY" and source == "DIGIT":
             should_update = True
-        elif source == "MAIN" and self.current_state not in ["ACT3_AUTHENTICATE", "ACT4_DELIVERY"]:
+        # [수정] AI가 작동 중이더라도 MAIN 영상은 계속 업데이트되게 하여 '멈춤' 느낌 삭제
+        elif source == "MAIN":
             should_update = True
 
         if should_update:
