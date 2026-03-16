@@ -7,18 +7,13 @@ from time import sleep
 from gpiozero import AngularServo, TonalBuzzer
 from gpiozero.tones import Tone
 import threading
-import os
 
-# pigpio 경고를 끄기 위한 환경 변수 설정 (코드 상단에 배치)
-os.environ['GPIOZERO_PIN_FACTORY'] = 'pigpio'
+
 
 # =========================
 # LCD / BUZZER 전역 장치
 # =========================
-try:
-    lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
-except:
-    print("LCD를 찾을 수 없습니다. 주소를 확인하세요.")
+lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
 buzzer = TonalBuzzer(19)   # BCM GPIO19
 
 # =========================
@@ -690,14 +685,14 @@ class Controller(Node):
     def __init__(self):
         super().__init__('controller')
 
-        self.declare_parameter('qos_depth', 1)
+        self.declare_parameter('qos_depth', 10)
         qos_depth = self.get_parameter('qos_depth').value
 
         qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=qos_depth,
-            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
+            durability=QoSDurabilityPolicy.VOLATILE
         )
 
         self.face_sub = self.create_subscription(String, '/face_cmd', self.face_callback, qos)
@@ -705,35 +700,42 @@ class Controller(Node):
         self.tail_sub = self.create_subscription(String, '/tail_cmd', self.tail_callback, qos)
 
         self.lcd_lock = threading.Lock()
-        self.current_face_cmd = "" # 현재 실행 중인 표정 저장
-
         self.buzzer_lock = threading.Lock()
         self.tail_lock = threading.Lock()
 
-        self.get_logger().info('🚀 LCD 하드웨어 초기화 중...')
+        # 서보 2개
+        self.tail_up = AngularServo(
+            12,                         # 위쪽 서보
+            min_angle=0,
+            max_angle=90,
+            min_pulse_width=0.0005,
+            max_pulse_width=0.0024
+        )
 
-        try:
-            # 서보 2개
-            self.tail_up = AngularServo(
-                12,                         # 위쪽 서보
-                min_angle=-90,
-                max_angle=90,
-                min_pulse_width=0.0005,
-                max_pulse_width=0.0025
-            )
+        self.tail_down = AngularServo(
+            13,                         # 아래쪽 서보
+            min_angle=0,
+            max_angle=90,
+            min_pulse_width=0.0005,
+            max_pulse_width=0.0024
+        )
 
-            self.tail_down = AngularServo(
-                13,                         # 아래쪽 서보
-                min_angle=-90,
-                max_angle=90,
-                min_pulse_width=0.0005,
-                max_pulse_width=0.0025
-            )
-        except:
-            self.get_logger().warn("서보모터를 초기화할 수 없습니다.")
+        self.ears = AngularServo(
+            18,                         # 아래쪽 서보
+            min_angle=0,
+            max_angle=90,
+            min_pulse_width=0.0005,
+            max_pulse_width=0.0024
+        )
 
         self.buzzer = buzzer
+        self.tail_mode = 'basic'
+        self.tail_running = True
+        threading.Thread(target=self.run_tail, daemon=True).start()
 
+
+        lcd.clear()
+        lcd.clear()
         lcd.clear()
         lcd.write_string("Face LCD Ready")
         booting_screen()
@@ -744,13 +746,7 @@ class Controller(Node):
     # -------------------------
     def face_callback(self, msg: String):
         cmd = msg.data.strip().lower()
-
-        # [핵심] 동일한 명령이 이미 실행 중이면 무시 (LCD 부하 감소)
-        if cmd == self.current_face_cmd:
-            return
-        
         self.get_logger().info(f'Face cmd: {cmd}')
-        self.current_face_cmd = cmd
         threading.Thread(target=self.run_face, args=(cmd,), daemon=True).start()
 
     def run_face(self, cmd: str):
@@ -786,14 +782,13 @@ class Controller(Node):
         elif cmd == 'money':
             money_face_eyes(5)
 
+
         else:
             self.get_logger().warning(f'Unknown face command: {cmd}')
             lcd.clear()
             lcd.write_string("Unknown cmd")
             lcd.cursor_pos = (1, 0)
             lcd.write_string(cmd[:16])
-
-        self.current_face_cmd = ""
 
     # -------------------------
     # BUZZER
@@ -852,49 +847,55 @@ class Controller(Node):
     def tail_callback(self, msg: String):
         cmd = msg.data.strip().lower()
         self.get_logger().info(f'Tail cmd: {cmd}')
-        threading.Thread(target=self.run_tail, args=(cmd,), daemon=True).start()
 
-    def run_tail(self, cmd: str):
-     with self.tail_lock:
-        if cmd == 'normal':
-            self.tail_basic()
-
-        elif cmd == 'angry':
-            self.tail_angry()
-
+        if cmd == 'angry':
+            self.tail_mode = 'angry'
         elif cmd == 'friendly':
-            self.tail_friendly()
-
+            self.tail_mode = 'friendly'
         elif cmd == 'stop':
-            self.tail_stop()
-
+            self.tail_mode = 'stop'
+        elif cmd == 'basic' or cmd == 'normal':
+            self.tail_mode = 'basic'
         else:
             self.get_logger().warning(f'Unknown tail command: {cmd}')
 
+    def run_tail(self):
+        while self.tail_running:
+            with self.tail_lock:
+                if self.tail_mode == 'basic':
+                    self.tail_basic()
+
+                elif self.tail_mode == 'angry':
+                    self.tail_angry()
+                    self.tail_mode = 'basic'
+
+                elif self.tail_mode == 'friendly':
+                    self.tail_friendly()
+                    self.tail_mode = 'basic'
+
+                elif self.tail_mode == 'stop':
+                    self.tail_stop()
+                    sleep(0.1)
+
     def tail_stop(self):
-        self.tail_up.angle = 10
+        self.tail_up.angle = 0
         self.tail_down.angle = 0
 
     def tail_basic(self):
-        # 평상시: 살랑살랑 크게
-        for _ in range(3):
-            self.tail_up.angle = 20
-            self.tail_down.angle = -20
-            sleep(0.35)
+        for _ in range(8):
+            for basic_angle in range(10, 51, 5):
+                self.tail_up.angle = basic_angle
+                self.tail_down.angle = basic_angle
+                self.ears.angle = basic_angle
+                sleep(0.05)
 
-            self.tail_up.angle = 55
-            self.tail_down.angle = 20
-            sleep(0.35)
+            for basic_angle in range(50, 9, -5):
+                self.tail_up.angle = basic_angle
+                self.tail_down.angle = basic_angle
+                self.ears.angle = basic_angle
+                sleep(0.05)
 
-            self.tail_up.angle = 20
-            self.tail_down.angle = -20
-            sleep(0.35)
-
-            self.tail_up.angle = -15
-            self.tail_down.angle = -40
-            sleep(0.35)
-
-        self.tail_stop()
+                self.tail_stop()
 
     def tail_angry(self):
         # 화날때: 바르르 떨기
@@ -914,13 +915,12 @@ class Controller(Node):
         self.tail_stop()
 
     def tail_friendly(self):
-        # 친해지자: 위쪽만 꺾이며 움직임
-        self.tail_down.angle = 10
+        self.tail_down.angle = 5
 
         for _ in range(4):
-            self.tail_up.angle = 20
+            self.tail_up.angle = 10
             sleep(0.25)
-            self.tail_up.angle = 70
+            self.tail_up.angle = 25
             sleep(0.25)
 
         self.tail_stop()
@@ -940,7 +940,8 @@ def main(args=None):
         node.tail_down.close()
         buzzer.close()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
