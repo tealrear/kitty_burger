@@ -325,17 +325,18 @@ QLineEdit {
       </property>
      </widget>
     </widget>
-    <widget class="QLabel" name="face_label">
+    <widget class="QWidget" name="face_widget" native="true">
      <property name="geometry">
       <rect>
-       <x>90</x>
-       <y>50</y>
-       <width>551</width>
-       <height>331</height>
+       <x>60</x>
+       <y>30</y>
+       <width>681</width>
+       <height>401</height>
       </rect>
      </property>
-     <property name="text">
-      <string>face_label</string>
+     <property name="styleSheet">
+      <string notr="true">background-color: #000000;
+border: none;</string>
      </property>
     </widget>
    </widget>
