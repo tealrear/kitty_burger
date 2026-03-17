@@ -23,7 +23,7 @@ class SdrMissionController(Node):
         self._init_comms()
 
         self.create_timer(0.1, self.main_loop)
-        self.get_logger().info("🚀 [SDR] 모듈화된 미션 컨트롤러 가동")
+        self.get_logger().info("🚀 [SDR] 미션 컨트롤러 가동")
 
     def _init_variables(self):
         self.last_obj, self.lidar_obstacle = "NONE", False
@@ -45,6 +45,18 @@ class SdrMissionController(Node):
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', QOS_MISSION)
         self.state_pub = self.create_publisher(String, '/mission_state', QOS_MISSION)
 
+    def check_stable(self, duration):
+        """현재 상태 진입 후 duration초가 지났는지 확인 + 로그 출력"""
+        elapsed = time.time() - self.state_start_time
+        remaining = duration - elapsed
+        
+        if remaining > 0:
+            # 1초 간격으로만 남은 시간 로그 출력 (터미널 도배 방지)
+            if int(elapsed * 10) % 10 == 0: 
+                self.get_logger().info(f"⏳ [{self.state}] 안정화 대기 중... 남은 시간: {remaining:.1f}s")
+            return False
+        return True
+
     def main_loop(self):
         now = time.time()
         start_time = self.state_start_time
@@ -56,37 +68,34 @@ class SdrMissionController(Node):
             self.get_logger().info(f"🔄 상태 변경: {self.last_state} -> {self.state}")
             self.state_start_time = now # ROS 시간 객체 저장
             self.last_state = self.state
-            self.last_obj = "NONE"
+            self.last_obj, self.wait_start_time = "NONE", 0
             self.filter.timers.clear()
-            self.wait_start_time = 0
+            self.robot.last_sent["buzzer"] = "" # 상태 바뀔 때 부저 초기화
 
-        time_diff = now - self.state_start_time
-        is_stable = time_diff > STABLE_DELAY
         has_obstacle = (self.last_obj == "BLUE" or self.lidar_obstacle)
         self.state_pub.publish(String(data=self.state))
-        self.get_logger().info(f"time_diff {time_diff}, is_stable {is_stable}")
 
         # 1단계: 졸음 주행
         if self.state == ACT0_SLEEPY:
-            if is_stable:
-                self.get_logger().info("꾸벅꾸벅 조는 표정")
+            self.get_logger().info("졸음 주행")
+            if self.check_stable(7.0):
                 self.robot.send(face="sleepy", tail="stop") # 꾸벅꾸벅 조는 표정
                 t.linear.x = 0.01
                 t.angular.z = 0.1 if int(now * 2) % 2 == 0 else -0.1
 
                 # 장애물이 있으면
-                if has_obstacle:
+                if self.check_stable(3.0) and has_obstacle:
                     if now - self.state_start_time > 3.0:
                         self.get_logger().info("⚠️ 3초간 졸다가 장애물 발견! 후퇴 모드 진입")
                         self.state = ACT1_ALARM
                         self.munchi_count = 0
                     else:
-                        # 3초가 되기 전까지는 장애물이 있어도 '졸음' 상태 유지 (로그 출력 생략 가능)
                         pass
+                
 
         # 2단계: 장애물 발견 및 3단 후퇴
         elif self.state == ACT1_ALARM:
-            self.get_logger().info("놀란 표정")
+            self.get_logger().info("장애물 발견 및 3단 후퇴")
             self.robot.send(face="surprise", buzzer="danger")
             self.munchi_count += 1
             if (self.munchi_count // 10) < 3: 
@@ -97,6 +106,7 @@ class SdrMissionController(Node):
 
         # 3단계: 대기 및 장애물 제거 확인
         elif self.state == ACT2_WAIT:
+            self.get_logger().info("대기 및 장애물 제거 확인")
             self.robot.send(face="suspicious", tail="stop") # 경계하는 표정으로 대기
 
             # 비전과 라이다 모두 장애물이 없다고 판단할 때
@@ -117,21 +127,20 @@ class SdrMissionController(Node):
 
         # 우회 로직 - 여기에는 자율주행을 붙일 예정
         elif self.state == ACT2_BYPASS:
-            self.get_logger().info("우회 로직")
+            self.get_logger().info("자율주행")
             self.robot.send(face="angry", buzzer="warning")
             self.munchi_count += 1
-            if self.munchi_count < 20: t.angular.z = 1.2
-            elif self.munchi_count < 60: t.linear.x = 0.15
-            elif self.munchi_count < 80: t.angular.z = -1.2
+            if self.munchi_count < 20: t.angular.z = 0.01
+            elif self.munchi_count < 60: t.linear.x = 0.01
+            elif self.munchi_count < 80: t.angular.z = -0.01
             else: 
                 self.robot.send(face="neutral", buzzer="happy")
-                self.robot.last_sent["buzzer"] = ""
                 self.state = ACT3_AUTHENTICATE
 
         # [핵심 추가] 4. 주인 인증 (이리와!)
         elif self.state == ACT3_AUTHENTICATE:
-            if is_stable:
-                self.get_logger().info("주인 인증")
+            if self.check_stable(5.0):
+                self.get_logger().info("주인 인증 (이리와!)")
                 self.robot.send(face="veyes")
                 print("current_gesture : ", self.current_gesture)
                 print("current_face : ", self.current_face)
@@ -153,7 +162,7 @@ class SdrMissionController(Node):
         # 5. 숫자 인식 대기
         if self.state == ACT4_DELIVERY:
             # 1. 시나리오 전환 후 2초 대기 (배경 인식 방지)
-            if is_stable:
+            if self.check_stable(5.0):
                 # 2. 숫자가 1초 동안 똑같이 보여야 확정
                 if self.filter.is_confirmed("digit", self.current_digit, threshold=2.0):
                     self.get_logger().info(f"✅ 숫자 {self.current_digit} 확정!")
@@ -185,9 +194,10 @@ class SdrMissionController(Node):
 
         # 7. 결제 및 쓰다듬기 상호작용
         elif self.state == ACT5_PAYMENT:
+            self.get_logger().info(f"결제 및 쓰다듬기 상호작용")
 
             # 1. 안정화 대기 (상태 전환 후 2초간 무시)
-            if is_stable:
+            if self.check_stable(7.0):
                 # [중요] C++ 노드와 라벨 이름을 반드시 맞추세요 (BLUE, GREEN, YELLOW)
                 # 표정 매핑 딕셔너리 (코드 효율화)
                 payment_config = {
@@ -197,8 +207,8 @@ class SdrMissionController(Node):
                 }
 
                 # 2. 색상이 2초 동안 유지되어야 인정
+
                 if self.filter.is_confirmed("money", self.last_obj, threshold=2.0):
-                    self.get_logger().info(f"color self.last_obj is {self.last_obj}")
                     if self.last_obj in payment_config:
                         cfg = payment_config[self.last_obj]
                         self.robot.send(face=cfg["face"], buzzer=cfg["buzzer"])
@@ -207,7 +217,8 @@ class SdrMissionController(Node):
                 else: self.robot.send(face="blink")
 
         elif self.state == ACT6_GREAT:
-            if is_stable:
+            self.get_logger().info(f"주인님 엄지척")
+            if self.check_stable(5.0):
                 if self.current_gesture == "엄지척":
                     self.robot.send(face="hearteye", buzzer="happy")
                     self.state = ACT7_HAPPY_DANCE
@@ -215,6 +226,7 @@ class SdrMissionController(Node):
 
         # 8. 행복한 댄스
         elif self.state == ACT7_HAPPY_DANCE:
+            self.get_logger().info(f"행복한 댄스")
             self.robot.send(face="hearteye", tail="friendly", buzzer="happy")
             
             # 0.1초마다 방향을 바꿔서 빠르게 흔들기 (도리도리)
@@ -223,7 +235,7 @@ class SdrMissionController(Node):
             # 0.2초마다 앞뒤로 움직여서 들썩거리기 (위아래 느낌)
             t.linear.x = 0.05 if int(now * 5) % 2 == 0 else -0.05
             
-            if now - self.wait_start_time > 3.0:
+            if now - self.wait_start_time > 5.0:
                 self.get_logger().info("🏁 댄스 종료, 다시 졸음 주행으로...")
                 self.state = ACT0_SLEEPY
 

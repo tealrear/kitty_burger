@@ -146,17 +146,22 @@ private:
             final_result = color_detector_->detect(hsv, frame, "BLUE", cv::Scalar(100, 130, 50), cv::Scalar(130, 255, 255));
         } 
         else if (current_state_ == "ACT5_PAYMENT") {
-            // 1. 5,000원 (빨강/주황)
-            final_result = color_detector_->detect(hsv, frame, "MONEY_RED", cv::Scalar(0, 70, 70), cv::Scalar(20, 255, 255));
+            // 1. 5,000원 (빨강/주황) - 그대로 유지
+            final_result = color_detector_->detect(hsv, frame, "MONEY_RED", cv::Scalar(0, 69, 18), cv::Scalar(20, 255, 255));
             
-            // 2. 10,000원 (초록)
-            if (!final_result.success)
-                final_result = color_detector_->detect(hsv, frame, "MONEY_GREEN", cv::Scalar(40, 50, 50), cv::Scalar(90, 255, 255));
-            
-            // 3. 1,000원 (파랑)
-            if (!final_result.success)
-                final_result = color_detector_->detect(hsv, frame, "MONEY_BLUE", cv::Scalar(100, 50, 50), cv::Scalar(135, 255, 255));
+            // [중요] 2. 1,000원 (파랑) - 만원보다 먼저 검사!
+            // 범위를 85부터 시작해서 조금 더 연한 파랑(청록)도 잡게 함
+            if (!final_result.success) {
+                final_result = color_detector_->detect(hsv, frame, "MONEY_BLUE", cv::Scalar(85, 40, 40), cv::Scalar(135, 255, 255));
+            }
+
+            // 3. 10,000원 (초록)
+            // 파란색과 겹치지 않게 상한선을 80 정도로 조절
+            if (!final_result.success) {
+                final_result = color_detector_->detect(hsv, frame, "MONEY_GREEN", cv::Scalar(35, 40, 40), cv::Scalar(80, 255, 255));
+            }
         }
+
 
         // 결과 퍼블리싱
         publish_data(final_result);
@@ -172,7 +177,15 @@ private:
     void publish_image(cv::Mat& frame) {
         cv::line(frame, cv::Point(160, 0), cv::Point(160, 240), cv::Scalar(100, 100, 100), 1);
         std::vector<uchar> buf;
-        cv::imencode(".jpg", frame, buf);
+
+        // --- JPEG 품질 50 설정 부분 ---
+        // cv::IMWRITE_JPEG_QUALITY는 0~100 사이의 값을 가집니다.
+        std::vector<int> params;
+        params.push_back(cv::IMWRITE_JPEG_QUALITY);
+        params.push_back(50);
+
+        cv::imencode(".jpg", frame, buf, params);
+        
         auto img_msg = sensor_msgs::msg::CompressedImage();
         img_msg.header.stamp = this->now();
         img_msg.format = "jpeg";
