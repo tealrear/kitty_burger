@@ -34,6 +34,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'detect_money = sdr_brain_system.vision.detect_money:main',
             'detect_human = sdr_brain_system.vision.detect_human:main',
             'mission_controller = sdr_brain_system.mission.controller:main',
             'digit_reader = sdr_brain_system.digit.reader_node:main',
