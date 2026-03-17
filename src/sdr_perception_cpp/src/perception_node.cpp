@@ -145,18 +145,18 @@ private:
         if (current_state_ == "ACT0_SLEEPY" || current_state_ == "ACT1_ALARM" || current_state_ == "ACT2_WAIT") {
             final_result = color_detector_->detect(hsv, frame, "BLUE", cv::Scalar(100, 130, 50), cv::Scalar(130, 255, 255));
         } 
-        // else if (current_state_ == "ACT5_PAYMENT") {
-        //     // 1. 5,000원 (빨강/주황)
-        //     final_result = color_detector_->detect(hsv, frame, "MONEY_RED", cv::Scalar(0, 70, 70), cv::Scalar(20, 255, 255));
+        else if (current_state_ == "ACT5_PAYMENT") {
+            // 1. 5,000원 (빨강/주황)
+            final_result = color_detector_->detect(hsv, frame, "MONEY_RED", cv::Scalar(0, 70, 70), cv::Scalar(20, 255, 255));
             
-        //     // 2. 10,000원 (초록)
-        //     if (!final_result.success)
-        //         final_result = color_detector_->detect(hsv, frame, "MONEY_GREEN", cv::Scalar(40, 50, 50), cv::Scalar(90, 255, 255));
+            // 2. 10,000원 (초록)
+            if (!final_result.success)
+                final_result = color_detector_->detect(hsv, frame, "MONEY_GREEN", cv::Scalar(40, 50, 50), cv::Scalar(90, 255, 255));
             
-        //     // 3. 1,000원 (파랑)
-        //     if (!final_result.success)
-        //         final_result = color_detector_->detect(hsv, frame, "MONEY_BLUE", cv::Scalar(100, 50, 50), cv::Scalar(135, 255, 255));
-        // }
+            // 3. 1,000원 (파랑)
+            if (!final_result.success)
+                final_result = color_detector_->detect(hsv, frame, "MONEY_BLUE", cv::Scalar(100, 50, 50), cv::Scalar(135, 255, 255));
+        }
 
         // 결과 퍼블리싱
         publish_data(final_result);
