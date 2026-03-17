@@ -72,7 +72,7 @@ class DigitReaderNode(Node):
                 # 4. 디버그 영상 송출
                 proc_msg = CompressedImage()
                 proc_msg.format = "jpeg"
-                proc_msg.data = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 30])[1].tobytes()
+                proc_msg.data = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 50])[1].tobytes()
                 self.proc_pub.publish(proc_msg)
 
             except queue.Empty: continue

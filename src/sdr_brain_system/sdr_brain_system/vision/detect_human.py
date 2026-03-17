@@ -94,13 +94,32 @@ class DetectHumanNode(Node):
         if res.multi_hand_landmarks:
             for hand_landmarks in res.multi_hand_landmarks:
                 gesture = self.get_gesture(hand_landmarks)
-                tip_x = hand_landmarks.landmark[8].x
-                data = {"gesture": gesture, "tip_x": tip_x}
-                self.hand_pub.publish(String(data=json.dumps(data)))
-                # 2초 간격 로그
-                if time.time() - self.last_hand_log_time >= LOG_INTERVAL:
-                    self.get_logger().info(f"[HAND] Gesture: {gesture}, tip_x: {tip_x:.2f}")
-                    self.last_hand_log_time = time.time()
+
+                # [핵심] 현재 상태에서 꼭 필요한 제스처만 정의
+                # 이 리스트에 없는 제스처는 인식되어도 무시(발행 안 함)합니다.
+                allowed_gestures = {
+                    "ACT3_AUTHENTICATE": ["브이"],
+                    "ACT5_PAYMENT": ["보"],
+                    "ACT6_GREAT": ["엄지척"]
+                }
+                    
+                # 현재 상태에 허용된 제스처 목록 가져오기 (없으면 빈 리스트)
+                target_list = allowed_gestures.get(self.current_state, [])
+
+                # 허용된 제스처일 때만 토픽 발행
+                if gesture in target_list:
+                    tip_x = hand_landmarks.landmark[8].x
+                    data = {"gesture": gesture, "tip_x": tip_x}
+                    self.hand_pub.publish(String(data=json.dumps(data)))
+                    
+                    # 2초 간격 로그
+                    if time.time() - self.last_hand_log_time >= LOG_INTERVAL:
+                        self.get_logger().info(f"[HAND] Gesture: {gesture}, tip_x: {tip_x:.2f}")
+                        self.last_hand_log_time = time.time()
+                else:
+                    # 허용되지 않은 제스처이거나 "not known"인 경우 아무것도 하지 않음
+                    pass
+                
         return res.multi_hand_landmarks
 
     # ---------------- 얼굴/표정 계산 ----------------
@@ -130,7 +149,7 @@ class DetectHumanNode(Node):
             msg = CompressedImage()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.format = "jpeg"
-            msg.data = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 30])[1].tobytes()
+            msg.data = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 50])[1].tobytes()
             self.roi_pub.publish(msg) # /vision/roi/compressed 로 전송
         except Exception as e:
             self.get_logger().error(f"Debug Publish Error: {e}")
