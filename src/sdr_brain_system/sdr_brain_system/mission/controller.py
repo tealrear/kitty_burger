@@ -178,13 +178,13 @@ class SdrMissionController(Node):
             # [중요] C++ 노드와 라벨 이름을 반드시 맞추세요 (BLUE, GREEN, YELLOW)
             # 표정 매핑 딕셔너리 (코드 효율화)
             payment_config = {
-                "MONEY_GREEN":  {"face": "thankyou", "buzzer": "happy"},
-                "MONEY_YELLOW": {"face": "money",    "buzzer": "happy"},
+                "MONEY_RED":  {"face": "thankyou", "buzzer": "happy"},
+                "MONEY_GREEN": {"face": "money",    "buzzer": "happy"},
                 "MONEY_BLUE":   {"face": "cry",      "buzzer": "warning"} # 천원(BLUE)은 울기
             }
 
-            # 2. 색상이 0.5초 동안 유지되어야 인정
-            if self.filter.is_confirmed("money", self.last_obj, threshold=0.5):
+            # 2. 색상이 2초 동안 유지되어야 인정
+            if self.filter.is_confirmed("money", self.last_obj, threshold=2):
                 if self.last_obj in payment_config:
                     cfg = payment_config[self.last_obj]
                     self.robot.send(face=cfg["face"], buzzer=cfg["buzzer"])
@@ -204,9 +204,16 @@ class SdrMissionController(Node):
 
         # 8. 행복한 댄스
         elif self.state == ACT7_HAPPY_DANCE:
-            self.robot.send(face="hearteye", tail="friendly")
-            t.angular.z = 0.5
+            self.robot.send(face="hearteye", tail="friendly", buzzer="happy")
+            
+            # 0.1초마다 방향을 바꿔서 빠르게 흔들기 (도리도리)
+            t.angular.z = 1.5 if int(now * 10) % 2 == 0 else -1.5
+            
+            # 0.2초마다 앞뒤로 움직여서 들썩거리기 (위아래 느낌)
+            t.linear.x = 0.05 if int(now * 5) % 2 == 0 else -0.05
+            
             if now - self.wait_start_time > 3.0:
+                self.get_logger().info("🏁 댄스 종료, 다시 졸음 주행으로...")
                 self.state = ACT0_SLEEPY
 
         self.cmd_pub.publish(t)
